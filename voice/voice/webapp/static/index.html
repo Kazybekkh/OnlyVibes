@@ -82,7 +82,8 @@ const send = (ws, obj) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(
 // ---------- mic ----------
 async function startMic() {
   micStream = await navigator.mediaDevices.getUserMedia({ audio: {
-    channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    channelCount: 1, sampleRate: MIC_RATE, echoCancellation: true,
+    noiseSuppression: true, autoGainControl: true } });
   micCtx = new AudioContext({ sampleRate: MIC_RATE });
   const src = micCtx.createMediaStreamSource(micStream);
   const workletUrl = URL.createObjectURL(new Blob([`
@@ -109,12 +110,17 @@ async function startMic() {
 }
 
 // ---------- audio out: create/resume inside the user gesture ----------
+// Chunks are aggregated into ~250ms buffers before scheduling: raw per-chunk
+// scheduling causes audible clicks/robotic noise at chunk boundaries.
+let pendingPcm = [];   // array of Float32Array
+let pendingSamples = 0;
+const FLUSH_SAMPLES = (TTS_RATE * 250) / 1000;  // 250ms
+
 function ensureAudio() {
   if (!audioCtx) audioCtx = new AudioContext();
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
-function playPcm(b64) {
-  ensureAudio();
+function decodePcm(b64) {
   const bin = atob(b64);
   const n = bin.length >> 1;
   // copyToChannel requires Float32Array (Int16Array throws TypeError in Chrome)
@@ -123,14 +129,28 @@ function playPcm(b64) {
     const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
     floats[i] = (v << 16 >> 16) / 32768;   // signed int16 LE -> float [-1,1]
   }
-  const buf = audioCtx.createBuffer(1, n, TTS_RATE);
-  buf.copyToChannel(floats, 0);
+  return floats;
+}
+function flushPcm() {
+  if (!pendingSamples) return;
+  ensureAudio();
+  const all = new Float32Array(pendingSamples);
+  let off = 0;
+  for (const f of pendingPcm) { all.set(f, off); off += f.length; }
+  pendingPcm = []; pendingSamples = 0;
+  const buf = audioCtx.createBuffer(1, all.length, TTS_RATE);
+  buf.copyToChannel(all, 0);
   const src = audioCtx.createBufferSource();
   src.buffer = buf; src.connect(audioCtx.destination);
   const now = audioCtx.currentTime;
   nextPlayTime = Math.max(nextPlayTime, now);
   src.start(nextPlayTime);
   nextPlayTime += buf.duration;
+}
+function playPcm(b64) {
+  const f = decodePcm(b64);
+  pendingPcm.push(f); pendingSamples += f.length;
+  if (pendingSamples >= FLUSH_SAMPLES) flushPcm();
 }
 
 // ---------- STT: one fresh session per turn (it ends at transcription.done) ----------
@@ -172,6 +192,7 @@ async function openTts() {
       try { playPcm(msg.audio_data); }
       catch (e) { status("audio playback error: " + e.message); console.error(e); }
     } else if (msg.type === "speech.audio.done") {
+      flushPcm();  // play any remaining tail
       const drainMs = Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000);
       setTimeout(endTurn, drainMs + 150);
     } else if (msg.type === "error") {
@@ -190,6 +211,7 @@ async function runReply(userText) {
   history.push({ role: "user", content: userText });
   replyEl.textContent = "";
   status("thinking + speaking…");
+  if (micCtx) micCtx.suspend();   // don't let the mic hear our own reply
   await openTts();
   const r = await fetch("/api/chat", { method: "POST",
     headers: {"Content-Type":"application/json"},
@@ -229,6 +251,8 @@ async function runReply(userText) {
 function endTurn() {
   holding = false; turnActive = false;
   if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+  if (micCtx && micCtx.state === "suspended") micCtx.resume();
+  flushPcm();
   pad.classList.remove("holding");
   pad.textContent = "Hold to talk";
   status("ready — hold the button (or SPACE) to talk");
