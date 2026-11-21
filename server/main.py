@@ -13,7 +13,8 @@ Layout (all in server/):
     planning.py   plan validation + ref -> id mapping (pure)
     store.py      in-memory state + atomic JSON persistence
     peers.py      non-blocking per-socket senders
-    legacy.py     v1 passive monitor (reporter ingest, Mistral summarize)
+    legacy.py     v1 passive monitor + the "Mistral brain" (reporter ingest, cached
+                  background summaries, agent states, collision alerts, team headline)
     config.py     Settings from env
     tests/        `uv run pytest -q`
 
@@ -23,7 +24,7 @@ Endpoints:
                                        -> welcome, run_task, cancel_task, chat)
     WS   /board                        browsers: snapshot, then project/task/event/message/worker
                                        frames, ping every 15 s
-    GET  /api/state                    {projects, tasks, workers, messages, laptops}
+    GET  /api/state                    {projects, tasks, workers, messages, laptops, team_summary, alerts}
     GET  /api/projects                 list of projects
     POST /api/projects                 {prompt, repo?, base_branch?} -> Project (+ PLAN task)
     GET  /api/projects/{id}            {project, tasks}
@@ -33,12 +34,15 @@ Endpoints:
     POST /api/messages                 {project_id, to?, text, name?}
     GET  /api/workers
     /api/agent/say|inbox|progress|board|plan   for the `ov` CLI (Bearer <run_task.token>)
-  Legacy (unchanged behaviour)
-    WS   /ws         <- reporters stream laptop status messages (shared/schema.json)
-    WS   /view       -> 3D viewers get all laptop states 2x/s; besides reporter laptops it now also
-                        lists one synthesized laptop per connected worker whose "agents" are the
-                        tasks it runs (merged into the reporter entry with the same tailscale_ip)
-    POST /summarize  -> {"last_log": "..."} -> {"summary": "..."} via Mistral Small
+  Legacy (v1 passive monitor + Mistral brain, see legacy.py)
+    WS   /ws         <- reporters stream laptop status messages (shared/schema.json); the server
+                        stamps "_seen" with its own clock and the brain fills summaries/states
+                        in background tasks — this handler never waits for Mistral
+    WS   /view       -> 3D viewers get {"type":"state","ts","team_summary","alerts","laptops"} at
+                        2 Hz; besides reporter laptops it also lists one synthesized laptop per
+                        connected worker whose "agents" are the tasks it runs (merged into the
+                        reporter entry with the same tailscale_ip)
+    POST /summarize  -> {"last_log": "..."} -> {"summary": "..."} short task title via Mistral Small
   Static
     GET  /           -> web/index.html (kanban board)
     GET  /ar         -> web/ar.html (old Three.js / WebXR view)
@@ -58,10 +62,13 @@ Env vars:
     OV_SHARED_SECRET  if set, WS /worker requires ?secret=<value> (workers: append it to SERVER_URL)
     OV_DATA_DIR       where state is persisted (default server/data)
     OV_WEB_DIR        static files dir (default ../web)
-    MISTRAL_API_KEY   enables summarize() through the Mistral API; without it the
-                      stub falls back to a truncated raw log line
-    MISTRAL_MODEL     model used by summarize() (default mistral-small-latest)
+    MISTRAL_API_KEY   enables the brain's Mistral calls (summaries, team headline) through the
+                      Mistral API; without it (or on any API error) summaries are "" (never the
+                      raw log line) and the team headline falls back to a plain count line
+    MISTRAL_MODEL     model used by the brain (default mistral-small-latest)
     STALE_AFTER       seconds without updates before a reporter laptop is dropped (default 5)
+    SUMMARY_EVERY     min seconds between Mistral summary calls per agent (default 5)
+    STUCK_AFTER       seconds of continuous errors before an agent is "stuck" (default 45)
 
 Run:
     cd server
@@ -88,7 +95,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import Settings
 from hub import Hub, WorkerConn
-from legacy import summarize
+from legacy import laptop_key, summarize
 from models import ApiError, now
 from peers import Peer, serve_peer
 
@@ -170,7 +177,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/state")
     async def api_state() -> dict:
         async with hub.lock:
-            return {"ts": now(), **hub.state(), "laptops": hub.legacy_laptops(now())}
+            t = now()
+            view = hub.legacy_view(t)
+            return {"ts": t, **hub.state(),
+                    "laptops": view["laptops"], "team_summary": view["team_summary"], "alerts": view["alerts"]}
 
     @app.get("/api/projects")
     async def list_projects() -> list:
@@ -325,26 +335,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hub.board_peers.discard(peer)
 
     # ---------------------------------------------------------------- legacy
-    # summary cache + rate limit for the legacy /ws path (ported from kazy/ar-fixes):
-    # (laptop_key, agent_name) -> (last_log, summary); at most 1 Mistral call per
-    # agent per SUMMARY_RATE_LIMIT_S seconds, and only when last_log changed
-    summary_cache: dict[tuple[str, str], tuple[str, str]] = {}
-    summary_rate: dict[tuple[str, str], float] = {}
-    SUMMARY_RATE_LIMIT_S = 5.0
-
-    async def get_summary(laptop_key: str, agent: dict) -> str:
-        name = agent.get("name", "")
-        log = (agent.get("last_log") or "").strip()
-        key = (laptop_key, name)
-        cached = summary_cache.get(key)
-        if cached and cached[0] == log:
-            return cached[1]
-        if time.time() - summary_rate.get(key, 0.0) < SUMMARY_RATE_LIMIT_S:
-            return cached[1] if cached else ""
-        summary_rate[key] = time.time()
-        s = await summarize(log, settings.mistral_api_key, settings.mistral_model)
-        summary_cache[key] = (log, s)
-        return s
+    # summaries for the legacy /ws path are cached + rate-limited by hub.brain (legacy.LegacyBrain)
 
     # laptop key (tailscale_ip, else hostname) -> that laptop's reporter socket, so the AR view
     # can send it whitelisted control requests (POST /api/control); request id -> answer future
@@ -371,22 +362,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if fut is not None and not fut.done():
                         fut.set_result({"ok": bool(data.get("ok")), "message": str(data.get("message") or "")[:300]})
                     continue
-                data.setdefault("ts", time.time())
-                ikey = (data.get("tailscale_ip") or "").strip()
-                if not ikey or ikey == "127.0.0.1":
-                    ikey = data.get("laptop") or "unknown"
+                t = now()
+                data.setdefault("ts", t)
+                ikey = laptop_key(data)  # tailscale_ip, else hostname when empty or 127.0.0.1
                 for k in (ikey, str(data.get("laptop") or "")):
                     if k:
                         reporter_socks[k] = websocket
                         my_keys.add(k)
-                # fill in summaries for agents that arrived without one
-                todo = [a for a in data.get("agents", []) if not a.get("summary") and a.get("last_log")]
-                if todo:
-                    sums = await asyncio.gather(*(get_summary(ikey, a) for a in todo))
-                    for a, s in zip(todo, sums):
-                        a["summary"] = s
+                # the brain fills summaries/states (Mistral runs in background tasks, never
+                # awaited here); ingest stamps _seen with the server clock, so a laptop with a
+                # wrong clock still shows up in the view
                 async with hub.lock:
-                    hub.legacy.ingest(data)
+                    hub.brain.on_status(ikey, data, t)
+                    hub.legacy.ingest(data, t)
         except WebSocketDisconnect:
             print(f"[server] reporter disconnected: {websocket.client}")
         finally:
@@ -449,7 +437,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 async with hub.lock:
                     t = now()
-                    msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t)})
+                    msg = json.dumps(hub.legacy_view(t))
                 await websocket.send_text(msg)
                 await asyncio.sleep(0.5)
         except (WebSocketDisconnect, RuntimeError):
