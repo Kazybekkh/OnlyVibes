@@ -1,0 +1,11 @@
+{"type":"thread.started","thread_id":"t-1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Planning** I will add a file."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'ls -la src'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'ls -la src'","aggregated_output":"ls: cannot access 'src': No such file or directory\n","exit_code":2,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/work/ws/src/timer.py","kind":"add"},{"path":"/work/ws/README.md","kind":"update"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"todo_list","items":[{"text":"write timer","completed":true},{"text":"tests","completed":false}]}}
+{"type":"item.updated","item":{"id":"item_3","type":"todo_list","items":[{"text":"write timer","completed":true},{"text":"tests","completed":true}]}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"Added src/timer.py."}}
+{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50}}
+{"type":"turn.failed","error":{"message":"stream disconnected"}}

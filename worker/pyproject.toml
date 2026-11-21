@@ -1,0 +1,28 @@
+[project]
+name = "onlyvibes-worker"
+version = "0.2.0"
+description = "OnlyVibes Orchestra worker: claims tasks from the hub, runs AI coding agent CLIs headless (Claude Code, Codex, Vibe, Cursor, mock), streams transcripts, pushes branches and opens/merges PRs"
+requires-python = ">=3.11"
+dependencies = [
+    "websockets>=14.0",
+]
+
+[project.scripts]
+onlyvibes-worker = "worker:main"
+onlyvibes-mock-fleet = "mock_fleet:main"
+ov = "ov:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["worker", "adapters", "prompts", "gitops", "ov", "mock_fleet", "mock_agent", "planparse"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

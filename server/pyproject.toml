@@ -1,7 +1,7 @@
 [project]
 name = "onlyvibes-server"
 version = "0.1.0"
-description = "OnlyVibes server: FastAPI websocket hub (reporters -> viewers), Mistral Small log summarizer, serves the web viewer"
+description = "OnlyVibes hub: orchestra server (projects, kanban tasks, worker scheduling, agent API, live board) + legacy reporter/3D view websockets"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
@@ -12,3 +12,12 @@ dependencies = [
 
 [project.scripts]
 onlyvibes-server = "main:serve"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
