@@ -406,10 +406,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         body = await _json_body(request)
         action = str(body.get("action") or "")
-        if action not in ("stop", "resume", "say"):
-            return _error(400, "bad_request", "action must be stop, resume or say")
+        if action not in ("stop", "resume", "say", "focus"):
+            return _error(400, "bad_request", "action must be stop, resume, say or focus")
         text = " ".join(str(body.get("text") or "").split())[:500]
         task_id = str(body.get("task_id") or "")
+        if task_id and action == "focus":
+            return {"ok": False, "message": "orchestra tasks run headless on the worker: no window to open"}
         if task_id:
             async with hub.lock:
                 task = hub.task_view(task_id)["task"]

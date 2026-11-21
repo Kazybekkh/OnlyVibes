@@ -736,6 +736,110 @@ def _live_agent_proc(info: dict) -> psutil.Process | None:
     return p if c and c[0] == info["agent"] and c[1] == "cli" else None
 
 
+# ---- focus: bring the window hosting an agent to the front on THIS laptop (no streaming).
+# Walk from the agent's process up its parents to the first known agent app / terminal and
+# activate only that. Whitelists below; nothing from the request reaches a command line
+# except via this lookup (the request only names a card).
+MAC_HOST_APPS = {"Cursor", "Claude", "Codex", "Vibe", "Terminal", "iTerm", "iTerm2", "Warp", "Ghostty",
+                 "Visual Studio Code", "Code", "WezTerm", "Alacritty", "kitty", "Hyper", "Tabby", "Zed",
+                 "Windsurf"}
+WIN_HOST_EXES = {"windowsterminal.exe", "cursor.exe", "code.exe", "claude.exe", "codex.exe", "wezterm-gui.exe",
+                 "alacritty.exe", "warp.exe", "windsurf.exe", "powershell.exe", "pwsh.exe", "cmd.exe"}
+LINUX_HOST_EXES = {"gnome-terminal-server", "konsole", "kitty", "alacritty", "wezterm-gui", "ghostty", "xterm",
+                   "tilix", "terminator", "xfce4-terminal", "cursor", "code", "claude", "warp-terminal",
+                   "windsurf", "zed"}
+
+
+def _mac_bundle(exe: str) -> tuple[str, str] | None:
+    """('/Applications/Cursor.app', 'Cursor') for any path inside the OUTERMOST .app bundle."""
+    m = re.match(r"^(.*?/([^/]+)\.app)(/|$)", exe or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def find_host(chain: list[tuple[int, str, str]], system: str) -> dict | None:
+    """First whitelisted window host in a process chain [(pid, exe_path, name), ...] (self first)."""
+    for pid, exe, name in chain:
+        if system == "Darwin":
+            b = _mac_bundle(exe)
+            if b and b[1] in MAC_HOST_APPS:
+                return {"pid": pid, "app": b[1], "bundle": b[0]}
+        else:
+            base = os.path.basename((exe or name or "").replace("\\", "/")).lower()
+            allowed = WIN_HOST_EXES if system == "Windows" else LINUX_HOST_EXES
+            if base in allowed or (name or "").lower() in allowed:
+                return {"pid": pid, "app": base or name.lower()}
+    return None
+
+
+def _proc_chain(pid: int, depth: int = 25) -> list[tuple[int, str, str]]:
+    chain = []
+    try:
+        p = psutil.Process(pid)
+    except psutil.Error:
+        return chain
+    while p is not None and len(chain) < depth and p.pid > 1:
+        try:
+            exe = p.exe()
+        except (psutil.Error, OSError):
+            try:
+                exe = (p.cmdline() or [""])[0]
+            except (psutil.Error, OSError):
+                exe = ""
+        try:
+            name = p.name()
+        except (psutil.Error, OSError):
+            name = ""
+        chain.append((p.pid, exe, name))
+        try:
+            p = p.parent()
+        except psutil.Error:
+            break
+    return chain
+
+
+def focus_command(host: dict, system: str) -> list[str] | None:
+    """The one fixed command that activates `host` (argv list, never a shell string)."""
+    if system == "Darwin":
+        bundle = host.get("bundle") or ""
+        if not bundle.endswith(".app") or not os.path.isdir(bundle):
+            return None
+        return ["open", "-a", bundle]
+    pid = int(host["pid"])
+    if system == "Windows":
+        return ["powershell", "-NoProfile", "-Command",
+                f"(New-Object -ComObject WScript.Shell).AppActivate({pid}) | Out-Null"]
+    if shutil.which("xdotool"):
+        return ["xdotool", "search", "--onlyvisible", "--pid", str(pid), "windowactivate"]
+    if shutil.which("wmctrl"):
+        return ["wmctrl", "-i", "-a", f"pid:{pid}"]  # resolved to a window id in focus_agent()
+    return None
+
+
+def focus_agent(info: dict) -> dict:
+    pid = int(info.get("pid") or 0)
+    if not pid:
+        return {"ok": False, "message": "this session has no running process to focus"}
+    system = platform.system()
+    host = find_host(_proc_chain(pid), system)
+    if host is None:
+        return {"ok": False, "message": "couldn't find its window (not in a known app or terminal)"}
+    cmd = focus_command(host, system)
+    if cmd is None:
+        return {"ok": False, "message": "focusing windows isn't supported here (install xdotool or wmctrl)"
+                if system == "Linux" else "couldn't focus that app"}
+    if cmd[0] == "wmctrl":  # wmctrl needs a window id: look it up by pid in `wmctrl -lp`
+        out = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=3).stdout
+        wid = next((ln.split()[0] for ln in out.splitlines() if len(ln.split()) > 2 and ln.split()[2] == str(host["pid"])), None)
+        if not wid:
+            return {"ok": False, "message": "no visible window for that app"}
+        cmd = ["wmctrl", "-i", "-a", wid]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+    if r.returncode != 0:
+        return {"ok": False, "message": f"couldn't focus {host['app']}"}
+    print(f"[reporter] control: focused {host['app']}")
+    return {"ok": True, "message": f"focused {host['app']}"}
+
+
 def handle_control(msg: dict) -> dict:
     agent = str(msg.get("agent") or "")
     action = str(msg.get("action") or "")
@@ -743,8 +847,10 @@ def handle_control(msg: dict) -> dict:
     info = _CONTROL.get(agent)
     if info is None:
         return {"ok": False, "message": f"{agent or 'that agent'} is not running on this laptop any more"}
+    if action == "focus":  # works for apps, terminal sessions and subagents (their parent's window)
+        return focus_agent(info)
     if info["kind"] == "app":
-        return {"ok": False, "message": "desktop apps are view-only from AR; control them in the app"}
+        return {"ok": False, "message": "desktop apps can only be focused from AR; control them in the app"}
     proc = _live_agent_proc(info)
     if action == "stop":
         if proc is None:

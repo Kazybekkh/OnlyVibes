@@ -612,7 +612,7 @@ panel.add(panelTitle, panelStatus);
 let panelButtons = [];
 const BTN_STYLE = {
   stop: 'rgba(170,32,44,0.97)', resume: 'rgba(22,120,70,0.97)', say: 'rgba(30,80,170,0.97)',
-  close: 'rgba(70,76,92,0.97)', back: 'rgba(70,76,92,0.97)',
+  close: 'rgba(70,76,92,0.97)', back: 'rgba(70,76,92,0.97)', focus: 'rgba(180,120,40,0.97)',
 };
 const QUICK_MESSAGES = ['continue', 'stop and summarize', 'wait for me'];
 
@@ -626,9 +626,11 @@ function buttonsFor(a) {
   if (panelMode === 'say') return [...QUICK_MESSAGES.map((m) => ['say', `“${m}”`, m]), ['back', '← Back']];
   const t = cardType(a), claude = agentLogoKey(a.name) === 'claude-code';
   if (t === 'task') return [['stop', '■  Stop task'], ['resume', '▶  Resume / retry'], ['say', '✉  Message…'], ['close', '✕  Close']];
-  if (t === 'subagent') return [['stop', '■  Stop (interrupts its session)'], ['close', '✕  Close']];
-  if (t === 'app') return [['close', '✕  Close']];
-  return [['stop', '■  Stop (Ctrl-C)'], ...(claude ? [['resume', '▶  Resume'], ['say', '✉  Message…']] : []), ['close', '✕  Close']];
+  // focus = bring that agent's app / terminal window to the front on the owner's laptop
+  const focus = ['focus', '⧉  Focus on laptop'];
+  if (t === 'subagent') return [focus, ['stop', '■  Stop (interrupts its session)'], ['close', '✕  Close']];
+  if (t === 'app') return [focus, ['close', '✕  Close']];
+  return [focus, ['stop', '■  Stop (Ctrl-C)'], ...(claude ? [['resume', '▶  Resume'], ['say', '✉  Message…']] : []), ['close', '✕  Close']];
 }
 function setStatus(text) {
   setCardText(panelStatus, text || ' ');
@@ -647,7 +649,7 @@ function buildPanel() {
     return b;
   });
   const t = cardType(a);
-  const note = t === 'app' ? 'desktop app: view only from AR' : t === 'task' ? 'orchestra task' : t === 'subagent' ? 'subagent' : 'terminal session';
+  const note = t === 'app' ? 'desktop app: focus only' : t === 'task' ? 'orchestra task' : t === 'subagent' ? 'subagent' : 'terminal session';
   setCardText(panelTitle, `${a.name}\n${note}`);
   // stack: title, buttons, status (panel-local, camera-aligned)
   let y = 0;
@@ -689,6 +691,11 @@ async function control(action, text = '') {
     });
     if (res.status === 403) { setStatus('locked: add ?key=... to the URL'); return; }
     const body = await res.json().catch(() => ({}));
+    if (action === 'focus' && body.ok) {
+      const owner = (selected && selected.card.userData.group && selected.card.userData.group.userData.owner) || 'the owner';
+      setStatus(`Opened on ${owner}'s laptop`);
+      return;
+    }
     setStatus(body.message || (body.error && body.error.message) || `HTTP ${res.status}`);
   } catch (e) {
     setStatus('could not reach the hub');
