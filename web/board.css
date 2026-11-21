@@ -111,15 +111,10 @@ textarea { resize: vertical; line-height: 1.45; }
   min-width: 0;
 }
 .brand {
-  display: inline-flex; align-items: center; gap: 8px; margin-right: 8px;
-  font: 600 19px/1 var(--f-cond); letter-spacing: 0.01em; color: var(--text); text-decoration: none;
+  display: inline-flex; align-items: center; gap: 5px; margin-right: 8px; text-decoration: none;
 }
-/* three level-meter bars: the same vocabulary as the fleet activity traces */
-.brand-mark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
-.brand-mark i { display: block; width: 3px; background: var(--accent); }
-.brand-mark i:nth-child(1) { height: 7px; }
-.brand-mark i:nth-child(2) { height: 14px; }
-.brand-mark i:nth-child(3) { height: 10px; }
+/* pixel-art logo (web/logo/build.py): 20 px tall = one CSS px per logo pixel, so it stays crisp */
+.brand-mark, .brand-name { display: block; height: 20px; width: auto; }
 .spacer { flex: 1; }
 
 .switcher { position: relative; min-width: 0; }
