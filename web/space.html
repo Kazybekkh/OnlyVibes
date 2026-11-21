@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OnlyVibes — Space</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="space.css" />
+</head>
+<body>
+
+<!-- icon sprite -->
+<svg class="svg-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
+<symbol id="claude" viewBox="0 0 32 32"><path d="m16 2 1 9 5-8-2 10 9-5-7 8 9 1-10 3 6 7-9-5-2 9-2-10-8 6 5-9-10-1 10-3-6-7 9 5Z" fill="currentColor"/></symbol>
+<symbol id="codex" viewBox="0 0 32 32"><path d="m12 8-8 8 8 8m8-16 8 8-8 8M18 5l-4 22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="mistral" viewBox="0 0 32 32"><path fill="#ffd66b" d="M4 3h6v6H4zm18 0h6v6h-6z"/><path fill="#ffb34d" d="M4 9h12v6H4zm12 0h12v6H16z"/><path fill="#ff854b" d="M4 15h24v6H4z"/><path fill="#ff634b" d="M4 21h6v8H4zm18 0h6v8h-6z"/></symbol>
+<symbol id="cube" viewBox="0 0 24 24"><path d="m12 3 9 5v9l-9 5-9-5V8Zm0 10 9-5M12 13 3 8m9 5v9M7 5.8l9 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+<symbol id="headset" viewBox="0 0 24 24"><path d="M5 7h14l3 10-3 2h-4l-3-3-3 3H5l-3-2Zm1-3h12M7 11h2m6 0h2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="laptop" viewBox="0 0 24 24"><path d="M5 4h14v12H5Zm-2 15h18l-2-3H5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+</defs></svg>
+
+<!-- left rail -->
+<aside class="rail">
+  <a class="brand" href="space.html">ov<sup>✳</sup></a>
+  <nav class="rail-nav">
+    <a class="rail-link active" href="space.html" title="Space view"><svg><use href="#cube"/></svg></a>
+    <a class="rail-link" id="rail-board" href="/" title="Board"><svg><use href="#laptop"/></svg></a>
+    <a class="rail-link rail-flow" href="#flow" title="The flow"><span class="glyph">⌁</span></a>
+  </nav>
+  <a class="rail-link rail-ar" href="/ar" id="rail-ar" title="AR view">AR</a>
+</aside>
+
+<div class="shell">
+  <!-- top bar -->
+  <header class="topbar">
+    <div class="wordmark">OnlyVibes<span class="tag-labs">LABS</span></div>
+    <div class="crumbs">Workspace <span class="crumb-sep">/</span> <span class="crumb-here">The common room</span>
+      <span class="tag-private">PRIVATE</span></div>
+    <div class="conn"><span id="conn-dot" class="cdot reconnecting"></span><span id="conn-text">Reconnecting…</span></div>
+  </header>
+
+  <main class="main">
+    <!-- heading -->
+    <section class="heading-row">
+      <div class="heading-main">
+        <div class="eyebrow">A little less distance. A lot more possibility.</div>
+        <h1>Your agents. One space<span class="coral">.</span></h1>
+        <p class="sub">Different laptops. Shared context. Keep the good ideas moving.</p>
+      </div>
+      <div class="actions">
+        <button id="focus-btn" class="btn" type="button"><svg class="bi"><use href="#headset"/></svg><span>Enter focus view</span></button>
+        <a class="btn" id="ar-link" href="/ar">Open in AR</a>
+      </div>
+    </section>
+
+    <!-- scene + flow -->
+    <section class="grid" id="grid">
+      <div class="panel scene-panel">
+        <div class="toolbar">
+          <svg class="tb-cube"><use href="#cube"/></svg>
+          <span class="room">The common room</span>
+          <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+          <div class="avatars" id="avatars"></div>
+          <span class="in-space" id="in-space">0 in space</span>
+        </div>
+
+        <div class="scene" id="scene" tabindex="0" aria-label="3D space of laptops. Drag to orbit, scroll to zoom, arrow keys to rotate.">
+          <div class="glow"></div>
+          <div class="world" id="world">
+            <div class="floor"></div>
+            <div class="ring ring-a"></div>
+            <div class="ring ring-b"></div>
+            <svg class="lines" id="lines" viewBox="0 0 1200 1200" preserveAspectRatio="none"></svg>
+            <div class="devices" id="devices"></div>
+          </div>
+          <div class="ov-tl">+ SHARED SPATIAL SESSION / 001</div>
+          <div class="ov-bottom">
+            <span id="ov-devices">● 0 devices connected</span>
+            <span class="c-x" id="coord-x">X -12°</span>
+            <span class="c-y" id="coord-y">Y 48°</span>
+            <span class="c-z" id="coord-z">Z 1.30</span>
+            <span>SPATIAL VIEW ◇</span>
+          </div>
+          <div class="pill"><span class="pill-glyph">⌁</span><span id="pill-text">waiting for the room…</span></div>
+        </div>
+
+        <div class="controls">
+          <span class="help">Drag to orbit · Scroll or + / − to zoom · Arrow keys to rotate / tilt</span>
+          <div class="ctrl">
+            <button class="ctl" id="zoom-out" type="button" title="Zoom out">−</button>
+            <span id="zoom-pct">130%</span>
+            <button class="ctl" id="zoom-in" type="button" title="Zoom in">+</button>
+            <button class="ctl" id="rot-l" type="button" title="Rotate left">↶</button>
+            <button class="ctl" id="rot-r" type="button" title="Rotate right">↷</button>
+            <button class="ctl" id="pause-btn" type="button">Pause rotation</button>
+            <button class="ctl" id="reset" type="button">Reset view</button>
+          </div>
+        </div>
+
+        <div class="panel-foot">
+          <span><span class="foot-dot">●</span> A shared space for independent minds.</span>
+          <span id="footer-conn">Reconnecting…</span>
+        </div>
+      </div>
+
+      <aside class="panel flow-panel" id="flow">
+        <div class="flow-head"><h2>The flow</h2><span class="live-badge"><span class="live-dot"></span>LIVE</span></div>
+        <p class="flow-intro">Follow the thought, not the device.</p>
+        <div class="tabs"><span class="tab">Current session</span><span class="session-id" id="session-id">ses-……</span></div>
+        <div class="timeline" id="timeline"></div>
+        <div class="context-note"><span class="cn-glyph">◎</span><span class="cn-text" id="context-text">Shared context — everyone in the room sees the same flow.</span></div>
+        <div class="meta-row"><span>Agents online</span><span id="agents-online">0</span></div>
+      </aside>
+    </section>
+
+    <!-- good company -->
+    <section class="company">
+      <h2>Good company.</h2>
+      <p class="company-sub">Every laptop in the room, and the agents running on it.</p>
+      <div class="cards" id="cards"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Built for presence. Designed for possibility.</span>
+    <span>ov✳ ONLYVIBES / live view</span>
+  </footer>
+</div>
+
+<script src="space.js"></script>
+</body>
+</html>
