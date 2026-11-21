@@ -34,6 +34,12 @@ const zoomPct = $('#zoom-pct');
 const pauseBtn = $('#pause-btn');
 const focusBtn = $('#focus-btn');
 
+// cached DOM writers: remember the last value written per node and skip no-op writes
+const setText = (n, v) => { v = String(v); if (n._txt !== v) { n._txt = v; n.textContent = v; } };
+const setCls = (n, v) => { if (n._cls !== v) { n._cls = v; n.setAttribute('class', v); } };
+const setAttr = (n, k, v) => { const c = n._attr || (n._attr = {}); if (c[k] !== v) { c[k] = v; n.setAttribute(k, v); } };
+const setStyle = (n, k, v) => { const c = n._sty || (n._sty = {}); if (c[k] !== v) { c[k] = v; n.style.setProperty(k, v); } };
+
 const REDUCED = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 const SVGNS = 'http://www.w3.org/2000/svg';
 
@@ -53,19 +59,37 @@ let sceneVisible = true;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const normAz = (a) => { a %= 360; if (a > 180) a -= 360; if (a < -180) a += 360; return a; };
 
+const zoomInBtn = $('#zoom-in');
+const zoomOutBtn = $('#zoom-out');
+// Only write the custom properties that actually changed: during auto-rotate that is
+// just --azimuth. The X/Y/Z readout is refreshed at most 4x a second (from frame()).
+const camOut = { az: '', el: '', scale: '', zoom: NaN };
+let readoutDirty = true, readoutAt = -Infinity;
 function applyCam() {
   cam.azimuth = normAz(cam.azimuth);
   cam.elevation = clamp(cam.elevation, ELEV_MIN, ELEV_MAX);
   cam.zoom = clamp(cam.zoom, ZOOM_MIN, ZOOM_MAX);
-  scene.style.setProperty('--world-scale', String(Math.max(0.1, fitScale) * cam.zoom));
-  scene.style.setProperty('--azimuth', cam.azimuth + 'deg');
-  scene.style.setProperty('--elevation', cam.elevation + 'deg');
-  zoomPct.textContent = Math.round(cam.zoom * 100) + '%';
-  $('#zoom-in').disabled = cam.zoom >= ZOOM_MAX;
-  $('#zoom-out').disabled = cam.zoom <= ZOOM_MIN;
-  coordX.textContent = 'X ' + Math.round(cam.azimuth) + '°';
-  coordY.textContent = 'Y ' + Math.round(cam.elevation) + '°';
-  coordZ.textContent = 'Z ' + cam.zoom.toFixed(2);
+  const az = cam.azimuth + 'deg';
+  if (az !== camOut.az) { camOut.az = az; scene.style.setProperty('--azimuth', az); readoutDirty = true; }
+  const elv = cam.elevation + 'deg';
+  if (elv !== camOut.el) { camOut.el = elv; scene.style.setProperty('--elevation', elv); readoutDirty = true; }
+  const sc = String(Math.max(0.1, fitScale) * cam.zoom);
+  if (sc !== camOut.scale) { camOut.scale = sc; scene.style.setProperty('--world-scale', sc); }
+  if (cam.zoom !== camOut.zoom) {
+    camOut.zoom = cam.zoom;
+    zoomPct.textContent = Math.round(cam.zoom * 100) + '%';
+    zoomInBtn.disabled = cam.zoom >= ZOOM_MAX;
+    zoomOutBtn.disabled = cam.zoom <= ZOOM_MIN;
+    readoutDirty = true;
+  }
+}
+function flushReadout(now) {
+  if (!readoutDirty || now - readoutAt < 250) return;
+  readoutDirty = false;
+  readoutAt = now;
+  setText(coordX, 'X ' + Math.round(cam.azimuth) + '°');
+  setText(coordY, 'Y ' + Math.round(cam.elevation) + '°');
+  setText(coordZ, 'Z ' + cam.zoom.toFixed(2));
 }
 function fit() {
   const w = scene.clientWidth || 800;
@@ -89,6 +113,7 @@ function frame(now) {
     cam.azimuth = normAz(cam.azimuth + 0.003 * dt);
     applyCam();
   }
+  flushReadout(now);
   requestAnimationFrame(frame);
 }
 if (window.IntersectionObserver) {
@@ -159,6 +184,7 @@ focusBtn.addEventListener('click', () => {
 
 fit();
 applyCam();
+flushReadout(performance.now());
 syncPause();
 sessionIdEl.textContent = 'ses-' + Math.random().toString(16).slice(2, 8);
 
@@ -288,6 +314,9 @@ function buildDevice(seat, index) {
 }
 
 function setStatus(ind, st) {
+  // rebuilding resets the working bars' CSS animation, so only do it when the state changes
+  if (ind._st === st) return;
+  ind._st = st;
   ind.className = 'status-ind st-' + st;
   ind.textContent = '';
   if (st === 'working') for (let i = 0; i < 4; i++) ind.appendChild(document.createElement('i'));
@@ -299,14 +328,14 @@ function updateDevice(entry, lap) {
 
   // device label
   const [bg, fg] = colorFor(owner);
-  entry.av.style.background = bg;
-  entry.av.style.color = fg;
-  entry.av.textContent = initials(owner);
-  entry.lname.textContent = owner;
-  entry.lsub.textContent = [lap.laptop, lap.tailscale_ip].filter(Boolean).join(' · ');
+  setStyle(entry.av, 'background', bg);
+  setStyle(entry.av, 'color', fg);
+  setText(entry.av, initials(owner));
+  setText(entry.lname, owner);
+  setText(entry.lsub, [lap.laptop, lap.tailscale_ip].filter(Boolean).join(' · '));
 
   // screen: window bar + last 5 distinct agent lines, newest at the bottom
-  entry.winLabel.textContent = (owner + ' / ' + (lap.laptop || '')).slice(0, 26);
+  setText(entry.winLabel, (owner + ' / ' + (lap.laptop || '')).slice(0, 26));
   let hist = agentHistory.get(key);
   if (!hist) { hist = []; agentHistory.set(key, hist); }
   for (const a of lap.agents || []) {
@@ -314,9 +343,14 @@ function updateDevice(entry, lap) {
     if (line && !hist.includes(line)) hist.push(line);
   }
   if (hist.length > 12) hist.splice(0, hist.length - 12);
-  entry.body.textContent = '';
-  for (const line of hist.slice(-5)) entry.body.appendChild(el('div', 'ln', line));
-  entry.body.appendChild(el('span', 'cursor', '_'));
+  const shown = hist.slice(-5);
+  const bodySig = shown.join('\n');
+  if (entry.bodySig !== bodySig) { // only re-render the screen when its lines change
+    entry.bodySig = bodySig;
+    entry.body.textContent = '';
+    for (const line of shown) entry.body.appendChild(el('div', 'ln', line));
+    entry.body.appendChild(el('span', 'cursor', '_'));
+  }
 
   // agent float = most active agent
   const agents = lap.agents || [];
@@ -324,22 +358,22 @@ function updateDevice(entry, lap) {
   if (top) {
     const st = agentState(top);
     const icon = agentIcon(top.name);
-    entry.tileIcon.setAttribute('href', icon.href);
-    entry.tileIcon.setAttribute('class', icon.cls);
-    entry.floatEl.className = 'agent-float' + (icon.tint ? ' ' + icon.tint : '');
-    entry.fname.textContent = top.name || 'agent';
+    setAttr(entry.tileIcon, 'href', icon.href);
+    setCls(entry.tileIcon, icon.cls);
+    setCls(entry.floatEl, 'agent-float' + (icon.tint ? ' ' + icon.tint : ''));
+    setText(entry.fname, top.name || 'agent');
     let line = String(top.summary || top.last_log || 'idle');
     if (line.length > 50) line = line.slice(0, 50) + '…';
-    entry.fline.textContent = line;
+    setText(entry.fline, line);
     setStatus(entry.ind, st);
-    entry.more.style.display = agents.length > 1 ? '' : 'none';
-    entry.more.textContent = '+' + (agents.length - 1);
+    setStyle(entry.more, 'display', agents.length > 1 ? '' : 'none');
+    setText(entry.more, '+' + (agents.length - 1));
   } else {
-    entry.floatEl.className = 'agent-float';
-    entry.fname.textContent = 'no agents';
-    entry.fline.textContent = 'idle';
+    setCls(entry.floatEl, 'agent-float');
+    setText(entry.fname, 'no agents');
+    setText(entry.fline, 'idle');
     setStatus(entry.ind, 'idle');
-    entry.more.style.display = 'none';
+    setStyle(entry.more, 'display', 'none');
   }
 }
 
@@ -356,11 +390,17 @@ function rebuildWires() {
     const ang = Math.atan2(my - 570, mx - 600);
     const cx = 600 + 424 * 1.3 * Math.cos(ang);
     const cy = 570 + 424 * 1.3 * Math.sin(ang);
+    const d = 'M ' + a.seat.x + ' ' + a.seat.y + ' Q ' + cx + ' ' + cy + ' ' + b.seat.x + ' ' + b.seat.y;
+    // fake glow: a wider, low-opacity stroke drawn under the line (shown only when active)
+    const glow = document.createElementNS(SVGNS, 'path');
+    glow.setAttribute('d', d);
+    setCls(glow, 'wire-glow');
+    linesSvg.appendChild(glow);
     const path = document.createElementNS(SVGNS, 'path');
     const id = 'wire-' + i;
     path.setAttribute('id', id);
-    path.setAttribute('d', 'M ' + a.seat.x + ' ' + a.seat.y + ' Q ' + cx + ' ' + cy + ' ' + b.seat.x + ' ' + b.seat.y);
-    path.setAttribute('class', 'wire idle');
+    path.setAttribute('d', d);
+    setCls(path, 'wire idle');
     linesSvg.appendChild(path);
     let dot = null;
     if (!REDUCED) {
@@ -376,25 +416,29 @@ function rebuildWires() {
       dot.appendChild(am);
       linesSvg.appendChild(dot);
     }
-    wires.push({ path, dot, a, b });
+    wires.push({ path, glow, dot, a, b });
   }
 }
 function updateWires() {
   for (const w of wires) {
     const active = laptopWorking(w.a.lap) && laptopWorking(w.b.lap);
-    w.path.setAttribute('class', 'wire ' + (active ? 'active' : 'idle'));
-    if (w.dot) w.dot.style.display = active ? '' : 'none';
+    setCls(w.path, 'wire ' + (active ? 'active' : 'idle'));
+    setCls(w.glow, 'wire-glow' + (active ? ' on' : ''));
+    if (w.dot) setStyle(w.dot, 'display', active ? '' : 'none');
   }
 }
 
 // ------------------------------------------------------------------ toolbar / cards / flow
+let avatarsSig = null;
 function rebuildToolbar(laps) {
+  setText(inSpaceEl, laps.length + ' in space');
+  setText(ovDevices, '● ' + laps.length + ' devices connected');
+  const owners = [...new Set(laps.map((lap) => lap.owner || lap.laptop || '?'))];
+  const sig = owners.join('\u0000');
+  if (sig === avatarsSig) return; // avatars only change when the set of owners does
+  avatarsSig = sig;
   avatarsEl.textContent = '';
-  const seenOwners = new Set();
-  for (const lap of laps) {
-    const owner = lap.owner || lap.laptop || '?';
-    if (seenOwners.has(owner)) continue;
-    seenOwners.add(owner);
+  for (const owner of owners) {
     const [bg, fg] = colorFor(owner);
     const av = el('div', 'av', initials(owner));
     av.style.background = bg;
@@ -402,11 +446,16 @@ function rebuildToolbar(laps) {
     av.setAttribute('title', owner);
     avatarsEl.appendChild(av);
   }
-  inSpaceEl.textContent = laps.length + ' in space';
-  ovDevices.textContent = '● ' + laps.length + ' devices connected';
 }
 
+let cardsSig = null;
 function rebuildCards(laps) {
+  const sig = JSON.stringify(laps.map((lap) => [
+    lap.owner || lap.laptop || '?', lap.laptop, lap.tailscale_ip,
+    (lap.agents || []).map((a) => [a.name, agentState(a), a.summary]),
+  ]));
+  if (sig === cardsSig) return; // owners / agents / states / summaries unchanged -> keep DOM
+  cardsSig = sig;
   cardsEl.textContent = '';
   for (const lap of laps) {
     const owner = lap.owner || lap.laptop || '?';
@@ -478,7 +527,7 @@ function updateHeadline(text) {
     body.appendChild(headItem.quoteEl);
     timelineEl.insertBefore(headItem, timelineEl.firstChild);
   }
-  headItem.quoteEl.textContent = text;
+  setText(headItem.quoteEl, text);
 }
 
 // ------------------------------------------------------------------ apply one /view frame
@@ -526,10 +575,10 @@ function applyState(msg) {
   const totalAgents = laps.reduce((n, l) => n + (l.agents || []).length, 0);
   const working = laps.reduce((n, l) => n + (l.agents || []).filter((a) => agentState(a) === 'working').length, 0);
   const headline = msg.team_summary || (laps.length + ' laptops · ' + totalAgents + ' agents · ' + working + ' working');
-  pillText.textContent = headline;
+  setText(pillText, headline);
   updateHeadline(headline);
-  contextText.textContent = 'Shared context · ' + laps.length + (laps.length === 1 ? ' laptop' : ' laptops') + ' in the room right now.';
-  agentsOnlineEl.textContent = String(totalAgents);
+  setText(contextText, 'Shared context · ' + laps.length + (laps.length === 1 ? ' laptop' : ' laptops') + ' in the room right now.');
+  setText(agentsOnlineEl, totalAgents);
 
   // alerts -> timeline (deduped by text)
   for (const al of msg.alerts || []) {
@@ -567,9 +616,27 @@ let gotMessage = false;
 let demoTimer = null;
 
 function setConn(kind, text) {
-  connText.textContent = text;
-  connDot.className = 'cdot ' + kind;
-  footerConn.textContent = text;
+  setText(connText, text);
+  setCls(connDot, 'cdot ' + kind);
+  setText(footerConn, text);
+}
+
+// Batch DOM work: incoming frames are queued and applied together in one animation frame.
+let stateQueue = [];
+let stateRaf = 0;
+let pendingConn = null;
+function flushStates() {
+  stateRaf = 0;
+  const q = stateQueue;
+  stateQueue = [];
+  if (pendingConn) { setConn(pendingConn[0], pendingConn[1]); pendingConn = null; }
+  for (const m of q) applyState(m);
+}
+function scheduleState(msg, conn) {
+  stateQueue.push(msg);
+  if (stateQueue.length > 20) stateQueue.shift(); // e.g. background tab: keep only recent frames
+  if (conn) pendingConn = conn;
+  if (!stateRaf) stateRaf = requestAnimationFrame(flushStates);
 }
 
 function connect() {
@@ -588,8 +655,7 @@ function connect() {
     if (!msg || msg.type !== 'state') return;
     gotMessage = true;
     if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
-    setConn('live', 'All systems vibing');
-    applyState(msg);
+    scheduleState(msg, ['live', 'All systems vibing']);
   };
   ws.onclose = () => {
     setConn('reconnecting', 'Reconnecting…');
@@ -665,7 +731,7 @@ function startDemo() {
   setConn('demo', 'Demo data');
   const apply = () => {
     demoTick++;
-    applyState({
+    scheduleState({
       type: 'state',
       ts: Date.now() / 1000,
       team_summary: DEMO_HEADLINES[demoTick % DEMO_HEADLINES.length],
@@ -682,6 +748,28 @@ function startDemo() {
   apply();
   demoTimer = setInterval(apply, 3000); // demo data changes every few seconds
 }
+
+// ------------------------------------------------------------------ performance safety net
+// Measure the frame rate for 2 s after load; below 40 fps, switch the scene to "lite"
+// (no dash animation, no moving dots, no box-shadows inside the 3D world).
+function perfProbe() {
+  let start = null, frames = 0;
+  const reset = () => { start = null; }; // a hidden tab would skew the measurement
+  document.addEventListener('visibilitychange', reset);
+  const step = (t) => {
+    if (start === null) { start = t; frames = 0; requestAnimationFrame(step); return; }
+    frames++;
+    if (t - start < 2000) { requestAnimationFrame(step); return; }
+    document.removeEventListener('visibilitychange', reset);
+    if (frames * 1000 / (t - start) < 40) {
+      scene.classList.add('lite');
+      try { linesSvg.pauseAnimations(); } catch (_) { /* SMIL unsupported */ }
+    }
+  };
+  requestAnimationFrame(step);
+}
+if (document.readyState === 'complete') perfProbe();
+else window.addEventListener('load', perfProbe, { once: true });
 
 setTimeout(() => { if (!gotMessage) startDemo(); }, 2500); // no server within 2.5 s -> demo
 connect();
