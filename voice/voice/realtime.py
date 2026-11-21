@@ -26,7 +26,10 @@ STT_RT_MODEL = os.environ.get("VOXTRAL_STT_RT_MODEL",
                               "voxtral-mini-transcribe-realtime-3")
 
 MIC_RATE = int(os.environ.get("VOICE_SAMPLE_RATE", "16000"))
-TTS_RATE = 24000  # Voxtral TTS output: 24 kHz mono int16
+# Realtime TTS `pcm` output is 48 kHz mono int16 (verified: exactly 2x the
+# samples of the offline 24 kHz WAV for the same text). The offline endpoint
+# returns 24 kHz WAV/MP3 instead.
+TTS_RATE = int(os.environ.get("VOXTRAL_TTS_PCM_RATE", "48000"))
 CHUNK_MS = 100
 
 
@@ -240,7 +243,7 @@ async def streaming_chat_deltas(prompt: str, model: str = CHAT_MODEL,
 # --------------------------------------------------------------------------
 
 class StreamingPlayer:
-    """Plays 24 kHz mono int16 PCM chunks gaplessly via sounddevice."""
+    """Plays realtime-TTS PCM chunks (48 kHz mono int16) gaplessly."""
 
     def __init__(self, sample_rate: int = TTS_RATE):
         self.sample_rate = sample_rate

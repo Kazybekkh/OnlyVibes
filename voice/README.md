@@ -81,7 +81,9 @@ print(agent.last_timings)                # transcript/first-audio/total seconds
 Latency knobs: `StreamingRecorder(silence_timeout=0.8, energy_threshold=...)`,
 `SdkRealtimeSTT(target_streaming_delay_ms=480)` (lower = snappier transcript,
 less accurate), `SdkRealtimeTTS` uses `streaming_mode="responsive"` +
-`response_format="pcm"` (24 kHz mono).
+`response_format="pcm"` — realtime PCM is **48 kHz** mono int16 (the offline
+endpoint returns 24 kHz WAV/MP3; playing realtime PCM at 24 kHz is what caused
+slowed/garbled audio). Override with `VOXTRAL_TTS_PCM_RATE` if Mistral changes it.
 
 ## The plug points (protocols in `voice/interface.py`)
 
