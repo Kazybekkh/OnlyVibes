@@ -5,22 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>OnlyVibes — 3D / AR table</title>
 <style>
+  :root {
+    --fg: #e8ecf3; --muted: #9aa4b6;
+    --panel: rgba(12, 16, 24, 0.62); --line: rgba(232, 236, 243, 0.14);
+    --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
   html, body {
-    margin: 0; height: 100%; overflow: hidden; background: #0b0e14; color: #e8ecf3;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; height: 100%; overflow: hidden; color: var(--fg); font-family: var(--font);
+    /* subtle vertical gradient behind the (transparent) WebGL canvas */
+    background: linear-gradient(180deg, #1a2236 0%, #0d111b 55%, #07090e 100%) fixed;
   }
   #app { position: fixed; inset: 0; }
-  #hud { position: fixed; top: 12px; left: 14px; z-index: 10; pointer-events: none; }
-  /* link back to the orchestration board (DOM HUD only; not rendered inside the immersive AR layer) */
-  #back {
-    display: inline-block; margin-bottom: 8px; pointer-events: auto;
-    font-size: 12px; color: #e8ecf3; text-decoration: none; opacity: .75;
-    padding: 4px 8px; border: 1px solid rgba(232,236,243,.25); border-radius: 4px;
+
+  /* ---- HUD: plain DOM overlay (never part of the 3D / immersive AR layer) ---- */
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; line-height: 1; padding: 6px 11px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--fg);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   }
-  #back:hover, #back:focus-visible { opacity: 1; border-color: rgba(232,236,243,.6); }
-  #hud h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .5px; }
-  #hud p  { font-size: 12px; margin: 0; opacity: .7; }
-  #status { position: fixed; top: 12px; right: 14px; z-index: 10; font-size: 12px; opacity: .85; text-align: right; }
+  #hud {
+    position: fixed; top: 12px; left: 14px; z-index: 10; pointer-events: none;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px; max-width: min(380px, 70vw);
+  }
+  /* link back to the orchestration board */
+  #back { pointer-events: auto; text-decoration: none; opacity: .8; }
+  #back:hover, #back:focus-visible { opacity: 1; border-color: rgba(232,236,243,.5); }
+  #hud .panel {
+    padding: 10px 14px 11px; border-radius: 14px;
+    background: var(--panel); border: 1px solid var(--line);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  #hud h1 { font-size: 17px; margin: 0 0 4px; letter-spacing: .4px; font-weight: 700; }
+  #stats { font-size: 12px; color: var(--muted); }
+  #headline { font-size: 13px; line-height: 1.35; margin-top: 8px; color: var(--fg); }
+  #hud .hint { font-size: 11px; margin: 8px 0 0; color: var(--muted); opacity: .8; }
+  #hud code { font-size: 11px; }
+
+  /* connection status, top-right */
+  #status { position: fixed; top: 12px; right: 14px; z-index: 10; }
+  #status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #7b8496; }
+  #status.live::before { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+
+  /* alerts: small red banners, top centre (moved above the AR button on narrow screens) */
+  #alerts {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 15;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    width: max-content; max-width: min(460px, 40vw); pointer-events: none;
+  }
+  #alerts .alert {
+    font-size: 12px; line-height: 1.3; padding: 6px 12px; border-radius: 999px;
+    background: rgba(185, 28, 28, 0.82); border: 1px solid rgba(254, 202, 202, 0.35); color: #fff;
+    box-shadow: 0 4px 18px rgba(239, 68, 68, 0.25);
+  }
+  @media (max-width: 760px) {
+    #alerts { top: auto; bottom: 84px; max-width: 90vw; }
+  }
+
   /* ARButton injects its own button; pin it to the bottom center */
   #app button, body > button {
     position: fixed !important; bottom: 24px !important; left: 50% !important;
@@ -42,39 +83,67 @@
 <body>
 <div id="app"></div>
 <div id="hud">
-  <a id="back" href="./">&larr; Board</a>
-  <h1>OnlyVibes</h1>
-  <p>live AI agents on every laptop · <span id="count">0</span> laptops · AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
+  <a id="back" class="pill" href="./">&larr; Board</a>
+  <div class="panel">
+    <h1>OnlyVibes</h1>
+    <div id="stats">0 laptops · 0 agents · 0 working</div>
+    <div id="headline" hidden></div>
+    <p class="hint">AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
+  </div>
 </div>
-<div id="status">connecting…</div>
+<div id="alerts"></div>
+<div id="status" class="pill">connecting…</div>
 
 <script type="module">
 import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ---------------------------------------------------------------- renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// alpha: the page's CSS gradient shows through on desktop, and the camera feed shows through in AR
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setClearColor(0x000000, 0);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0e14);
-scene.fog = new THREE.Fog(0x0b0e14, 9, 24);
+const FOG = new THREE.Fog(0x0d111b, 9, 24);   // matches the middle of the CSS gradient
+scene.fog = FOG;
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
 camera.position.set(0, 2.4, 5.4);
 camera.lookAt(0, 0.7, 0);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.4);
+// lighting: soft sky/ground fill + warm key + cool rim
+scene.add(new THREE.HemisphereLight(0xbcd4ff, 0x10131c, 0.9));
+const keyLight = new THREE.DirectionalLight(0xfff1e0, 1.5);
 keyLight.position.set(3, 6, 4);
 scene.add(keyLight);
-const rim = new THREE.PointLight(0x66aaff, 10, 25);
+const rim = new THREE.PointLight(0x66aaff, 14, 25);
 rim.position.set(-4, 3, -3);
 scene.add(rim);
+
+// ---------------------------------------------------------------- desktop orbit controls
+// slow auto-rotate; pauses while the user drags, resumes a moment after. Disabled during AR.
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.9, 0);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.5;
+controls.minDistance = 2.5;
+controls.maxDistance = 12;
+controls.maxPolarAngle = Math.PI * 0.48;
+controls.update();
+let resumeTimer = null;
+controls.addEventListener('start', () => { clearTimeout(resumeTimer); controls.autoRotate = false; });
+controls.addEventListener('end', () => {
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => { if (!renderer.xr.isPresenting) controls.autoRotate = true; }, 2500);
+});
 
 // ---------------------------------------------------------------- the table
 const world = new THREE.Group();          // everything the AR session shows
@@ -86,8 +155,8 @@ world.add(grid);
 
 const table = new THREE.Group();
 const top = new THREE.Mesh(
-  new THREE.CylinderGeometry(1.7, 1.7, 0.08, 48),
-  new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.55, metalness: 0.25 })
+  new THREE.CylinderGeometry(1.7, 1.7, 0.08, 64),
+  new THREE.MeshStandardMaterial({ color: 0x1f2533, roughness: 0.4, metalness: 0.4 })
 );
 top.position.y = 0.75;
 table.add(top);
@@ -97,9 +166,33 @@ const leg = new THREE.Mesh(
 );
 leg.position.y = 0.375;
 table.add(leg);
+
+// soft glowing ring around the table edge: a thin bright core plus two wider faint additive layers
+const ringLayers = [
+  { tube: 0.012, opacity: 0.95 },
+  { tube: 0.035, opacity: 0.22 },
+  { tube: 0.08,  opacity: 0.07 },
+].map(({ tube, opacity }) => {
+  const m = new THREE.Mesh(
+    new THREE.TorusGeometry(1.71, tube, 12, 128),
+    new THREE.MeshBasicMaterial({
+      color: 0x7dd3fc, transparent: true, opacity, depthWrite: false,
+      blending: THREE.AdditiveBlending, toneMapped: false,
+    })
+  );
+  m.rotation.x = Math.PI / 2;
+  m.position.y = 0.79;                    // top surface of the table
+  m.userData.baseOpacity = opacity;
+  table.add(m);
+  return m;
+});
 world.add(table);
 
-// ---------------------------------------------------------------- text cards
+// ---------------------------------------------------------------- canvas sprites (cards + labels)
+// Sprites always face the camera (billboarding), in desktop and AR alike.
+// Canvases are drawn at 2x for crisp text, then scaled down to world units.
+const PX = 0.0014; // world units per canvas pixel
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -110,79 +203,212 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function makeCard(opts = {}) {
-  const { bg = 'rgba(15,20,30,0.88)', fg = '#dfe6f3', fontPx = 24 } = opts;
+function makeCanvasSprite(w, h) {
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false }));
-  sprite.userData = { canvas, ctx, bg, fg, fontPx, tex: null };
-  setCardText(sprite, '');
+  canvas.width = w; canvas.height = h;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthTest: false, toneMapped: false,
+  }));
+  sprite.scale.set(w * PX, h * PX, 1);
+  // drawnKey: what the canvas currently shows; we only redraw when it changes
+  sprite.userData = { canvas, ctx: canvas.getContext('2d'), tex, drawnKey: null };
   return sprite;
 }
 
-function setCardText(sprite, text) {
-  const { canvas, ctx, bg, fg, fontPx } = sprite.userData;
-  const maxW = 560, pad = 14, lineH = fontPx + 7;
-  ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
-  // wrap (honoring explicit newlines), keep at most 4 lines
-  const lines = [];
-  for (const para of String(text).split('\n')) {
-    let cur = '';
-    for (const w of para.split(/\s+/).filter(Boolean)) {
-      const t = cur ? cur + ' ' + w : w;
-      if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; }
-      else cur = t;
-    }
-    if (cur) lines.push(cur);
-  }
-  const shown = lines.slice(0, 4);
-  if (lines.length > 4) shown[3] = shown[3].slice(0, -1) + '…';
-  canvas.width = maxW + pad * 2;
-  canvas.height = Math.max(1, shown.length) * lineH + pad * 2;
-  ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 14);
+function disposeSprite(sprite) {
+  sprite.userData.tex.dispose();
+  sprite.material.dispose();
+}
+
+// cut to about n characters with "…"
+function shorten(s, n = 60) {
+  s = String(s).replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s;
+}
+
+// extra safety: trim further if the text is still wider than maxW pixels
+function fitText(ctx, s, maxW) {
+  if (ctx.measureText(s).width <= maxW) return s;
+  while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+  return s.trimEnd() + '…';
+}
+
+// ---------------------------------------------------------------- agent cards
+const AGENT_COLORS = { vibe: '#FF7000', 'claude-code': '#D97757', codex: '#10A37F', cursor: '#8B8B8B' };
+const DEFAULT_AGENT_COLOR = '#5b6475';
+const STATE_COLORS = { working: '#22c55e', idle: '#7b8496', error: '#ef4444', stuck: '#ef4444' };
+
+// agent.state is optional; without it, fall back to CPU usage
+function agentState(a) {
+  if (Object.hasOwn(STATE_COLORS, a.state)) return a.state;
+  return Number(a.cpu) > 5 ? 'working' : 'idle';
+}
+
+const CARD_W = 1040, CARD_H = 200;
+
+function makeAgentCard() {
+  return makeCanvasSprite(CARD_W, CARD_H);
+}
+
+// Redraws only when the visible content changes. `blinkOn` drives the blinking dot of "stuck" agents.
+function drawAgentCard(sprite, a, blinkOn = true) {
+  const state = agentState(a);
+  const cpu = Math.round(Number(a.cpu) || 0);
+  const detail = shorten(a.summary || a.last_log || 'idle');
+  const dotOn = state !== 'stuck' || blinkOn;
+  const key = [a.name, cpu, state, detail, dotOn].join('|');
+  if (key === sprite.userData.drawnKey) return;
+  sprite.userData.drawnKey = key;
+
+  const { ctx, tex } = sprite.userData;
+  const W = CARD_W, H = CARD_H;
+  ctx.clearRect(0, 0, W, H);
+
+  // card body
+  roundRect(ctx, 4, 4, W - 8, H - 8, 36);
+  ctx.fillStyle = 'rgba(13, 17, 26, 0.92)';
   ctx.fill();
-  ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
-  ctx.fillStyle = fg;
-  shown.forEach((ln, i) => ctx.fillText(ln, pad, pad + fontPx + i * lineH - 5));
-  if (!sprite.userData.tex) {
-    sprite.userData.tex = new THREE.CanvasTexture(canvas);
-    sprite.material.map = sprite.userData.tex;
-    sprite.material.needsUpdate = true;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.09)';
+  ctx.stroke();
+
+  // line 1: status dot · agent badge · (state word if bad) · CPU %
+  const row1 = 64;
+  ctx.textBaseline = 'middle';
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(52, row1, 14, 0, Math.PI * 2);
+  if (dotOn) { ctx.shadowColor = STATE_COLORS[state]; ctx.shadowBlur = 18; ctx.fillStyle = STATE_COLORS[state]; }
+  else ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+  ctx.fill();
+  ctx.restore();
+
+  ctx.font = `700 32px ${'ui-sans-serif, system-ui, sans-serif'}`;
+  const name = fitText(ctx, String(a.name || 'agent'), 560);
+  const bw = ctx.measureText(name).width + 44;
+  roundRect(ctx, 86, row1 - 27, bw, 54, 27);
+  ctx.fillStyle = AGENT_COLORS[a.name] || DEFAULT_AGENT_COLOR;
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(name, 108, row1 + 1);
+
+  if (state === 'error' || state === 'stuck') {
+    ctx.font = '700 24px ui-sans-serif, system-ui, sans-serif';
+    ctx.fillStyle = '#fca5a5';
+    ctx.fillText(state.toUpperCase(), 86 + bw + 18, row1 + 1);
   }
-  sprite.userData.tex.needsUpdate = true;
-  const s = 0.0032; // world units per pixel
-  sprite.scale.set(canvas.width * s, canvas.height * s, 1);
+
+  ctx.font = '600 30px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillStyle = '#aab3c5';
+  ctx.textAlign = 'right';
+  ctx.fillText(`${cpu}% CPU`, W - 44, row1 + 1);
+  ctx.textAlign = 'left';
+
+  // line 2: summary / last_log / "idle"
+  ctx.font = '30px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillStyle = '#c9d1df';
+  ctx.fillText(fitText(ctx, detail, W - 88), 40, 146);
+
+  tex.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------- laptops
 const LAPTOP_COLORS = [0x7dd3fc, 0xf0abfc, 0x86efac, 0xfcd34d, 0xfca5a5, 0xc4b5fd];
 const laptopGroups = new Map(); // key (tailscale_ip) -> THREE.Group
 
-function buildLaptop(status, idx) {
+// stable colour per owner name
+function ownerColor(owner) {
+  let h = 0;
+  for (const c of String(owner || '')) h = (h * 31 + c.codePointAt(0)) >>> 0;
+  return LAPTOP_COLORS[h % LAPTOP_COLORS.length];
+}
+
+// soft radial glow texture, shared by all screen halos
+const GLOW_TEX = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.4, 'rgba(255,255,255,0.35)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+})();
+
+const LABEL_W = 720, LABEL_H = 170;
+
+// owner's name big (in their colour), laptop hostname small underneath
+function drawLaptopLabel(sprite, st, accentCss) {
+  const key = `${st.owner}|${st.laptop}`;
+  if (key === sprite.userData.drawnKey) return;
+  sprite.userData.drawnKey = key;
+
+  const { ctx, tex } = sprite.userData;
+  const W = LABEL_W, H = LABEL_H;
+  ctx.clearRect(0, 0, W, H);
+  roundRect(ctx, 4, 4, W - 8, H - 8, 40);
+  ctx.fillStyle = 'rgba(13, 17, 26, 0.9)';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = accentCss + '66';
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '800 62px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillStyle = accentCss;
+  ctx.fillText(fitText(ctx, String(st.owner || 'unknown'), W - 60), W / 2, 66);
+  ctx.font = '28px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillStyle = '#9aa4b6';
+  ctx.fillText(fitText(ctx, String(st.laptop || ''), W - 60), W / 2, 124);
+  ctx.textAlign = 'left';
+
+  tex.needsUpdate = true;
+}
+
+function buildLaptop(status) {
   const g = new THREE.Group();
-  const accent = new THREE.Color(LAPTOP_COLORS[idx % LAPTOP_COLORS.length]);
+  const accent = new THREE.Color(ownerColor(status.owner));
 
   const base = new THREE.Mesh(
     new THREE.BoxGeometry(0.62, 0.035, 0.42),
-    new THREE.MeshStandardMaterial({ color: 0x39415a, roughness: 0.5, metalness: 0.3 })
+    new THREE.MeshStandardMaterial({ color: 0x39415a, roughness: 0.45, metalness: 0.4 })
   );
   base.position.y = 0.018;
   g.add(base);
 
   const screen = new THREE.Mesh(
     new THREE.BoxGeometry(0.62, 0.4, 0.025),
-    new THREE.MeshStandardMaterial({ color: 0x0d1117, emissive: accent, emissiveIntensity: 0.6, roughness: 0.3 })
+    new THREE.MeshStandardMaterial({ color: 0x0d1117, emissive: accent, emissiveIntensity: 0.5, roughness: 0.3 })
   );
   screen.position.set(0, 0.21, -0.2);
   screen.rotation.x = -0.35;
   g.add(screen);
 
-  const label = makeCard({ fontPx: 24, bg: 'rgba(15,20,30,0.9)' });
+  // soft halo behind the screen in the owner's colour
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: GLOW_TEX, color: accent, transparent: true, opacity: 0.2,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+  }));
+  halo.position.set(0, 0.22, -0.24);
+  halo.scale.set(1.2, 0.9, 1);
+  g.add(halo);
+
+  const label = makeCanvasSprite(LABEL_W, LABEL_H);
   label.position.y = 0.66;
   g.add(label);
-  g.userData.label = label;
-  g.userData.cards = new Map(); // agentKey -> sprite
+
+  g.userData = {
+    label, screen, halo, cards: new Map(), // agentKey -> sprite
+    accentCss: '#' + accent.getHexString(),
+    working: false, phase: Math.random() * Math.PI * 2,
+  };
   return g;
 }
 
@@ -196,62 +422,109 @@ function layout() {
   });
 }
 
+// ---------------------------------------------------------------- HUD (DOM)
+const statsEl = document.getElementById('stats');
+const headlineEl = document.getElementById('headline');
+const alertsEl = document.getElementById('alerts');
+let lastAlertsKey = '';
+
+function updateHud(snap, nAgents, nWorking) {
+  const nLaptops = (snap.laptops || []).length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  statsEl.textContent = `${plural(nLaptops, 'laptop')} · ${plural(nAgents, 'agent')} · ${nWorking} working`;
+
+  // optional team headline
+  const summary = typeof snap.team_summary === 'string' ? snap.team_summary.trim() : '';
+  headlineEl.hidden = !summary;
+  headlineEl.textContent = summary;
+
+  // optional alerts: [{text}] (plain strings tolerated too); rebuilt only when they change
+  const texts = Array.isArray(snap.alerts)
+    ? snap.alerts.map(a => (typeof a === 'string' ? a : a && a.text)).filter(Boolean).map(String)
+    : [];
+  const key = texts.join('\n');
+  if (key !== lastAlertsKey) {
+    lastAlertsKey = key;
+    alertsEl.replaceChildren(...texts.map(t => {
+      const div = document.createElement('div');
+      div.className = 'alert';
+      div.textContent = '⚠ ' + t;
+      return div;
+    }));
+  }
+}
+
+// ---------------------------------------------------------------- apply a state snapshot
 function applyState(snap) {
   const seen = new Set();
+  let nAgents = 0, nWorking = 0;
   (snap.laptops || []).forEach((st) => {
     const key = st.tailscale_ip || st.laptop;
     seen.add(key);
     let g = laptopGroups.get(key);
     if (!g) {
-      g = buildLaptop(st, laptopGroups.size);
+      g = buildLaptop(st);
       laptopGroups.set(key, g);
       world.add(g);
       layout();
     }
-    setCardText(g.userData.label, `${st.laptop} · ${st.owner}\n${st.tailscale_ip}`);
+    drawLaptopLabel(g.userData.label, st, g.userData.accentCss);
 
     const cards = g.userData.cards;
     const names = new Set();
+    let working = false;
     (st.agents || []).forEach((a, j) => {
       const ak = `${a.name}:${a.pid}`;
       names.add(ak);
       let card = cards.get(ak);
       if (!card) {
-        card = makeCard({ fontPx: 21, bg: 'rgba(8,26,20,0.9)', fg: '#d9f4e6' });
+        card = makeAgentCard();
         card.userData.baseY = 1.05 + (j % 3) * 0.36;
         card.position.set(0, card.userData.baseY, 0);
         g.add(card);
         cards.set(ak, card);
       }
-      const head = `${a.name} · pid ${a.pid} · ${a.cpu}% cpu`;
-      const detail = a.summary || a.last_log || '';
-      setCardText(card, `${head}\n${(detail || '').slice(0, 200)}`);
+      card.userData.agent = a;            // kept for the stuck-dot blink in the render loop
+      drawAgentCard(card, a);
+      nAgents++;
+      if (agentState(a) === 'working') { working = true; nWorking++; }
     });
+    g.userData.working = working;
     for (const [ak, card] of [...cards.entries()]) {
-      if (!names.has(ak)) { g.remove(card); cards.delete(ak); }
+      if (!names.has(ak)) { g.remove(card); disposeSprite(card); cards.delete(ak); }
     }
   });
   for (const [key, g] of [...laptopGroups.entries()]) {
     if (!seen.has(key)) { world.remove(g); laptopGroups.delete(key); layout(); }
   }
-  document.getElementById('count').textContent = (snap.laptops || []).length;
+  updateHud(snap, nAgents, nWorking);
 }
 
 // ---------------------------------------------------------------- live data (WS /view) + fake fallback
 const statusEl = document.getElementById('status');
 let gotReal = false;
 
+function setStatus(text, live) {
+  statusEl.textContent = text;
+  statusEl.classList.toggle('live', live);
+}
+
 function connect() {
+  // opened straight from disk (file://): there is no hub to ask, so go straight to the fake-data fallback
+  if (!location.host) { setStatus('no server — fake data', false); return; }
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   const ws = new WebSocket(proto + location.host + '/view');
-  ws.onopen = () => { statusEl.textContent = 'live'; };
+  ws.onopen = () => { setStatus('live', true); };
   ws.onmessage = (ev) => {
     gotReal = true;
-    statusEl.textContent = 'live';
+    setStatus('live', true);
     try { applyState(JSON.parse(ev.data)); } catch { /* ignore bad frame */ }
   };
-  ws.onclose = () => { if (!gotReal) statusEl.textContent = 'no server — fake data'; setTimeout(connect, 2000); };
-  ws.onerror = () => { if (!gotReal) statusEl.textContent = 'no server — fake data'; };
+  ws.onclose = () => {
+    setStatus(gotReal ? 'reconnecting…' : 'no server — fake data', false);
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => { if (!gotReal) setStatus('no server — fake data', false); };
 }
 connect();
 
@@ -283,9 +556,20 @@ setTimeout(() => {
 const arButton = ARButton.createButton(renderer, { optionalFeatures: ['hit-test', 'local-floor'] });
 arButton.textContent = '📱 Enter AR';
 document.body.appendChild(arButton);
-// in AR, put the table ~1.5m in front of the user instead of at their feet
-renderer.xr.addEventListener('sessionstart', () => { world.position.set(0, 0, -1.5); });
-renderer.xr.addEventListener('sessionend', () => { world.position.set(0, 0, 0); });
+// in AR, put the table ~1.5m in front of the user instead of at their feet;
+// orbit controls and fog are desktop-only
+renderer.xr.addEventListener('sessionstart', () => {
+  world.position.set(0, 0, -1.5);
+  controls.enabled = false;
+  controls.autoRotate = false;
+  scene.fog = null;
+});
+renderer.xr.addEventListener('sessionend', () => {
+  world.position.set(0, 0, 0);
+  controls.enabled = true;
+  controls.autoRotate = true;
+  scene.fog = FOG;
+});
 
 // "← Board" link: "./" maps to the board when served by the hub; from file:// point at index.html.
 // It lives in the DOM HUD, so it never enters the immersive AR layer.
@@ -295,13 +579,32 @@ if (location.protocol === 'file:') document.getElementById('back').href = 'index
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const t = clock.getElapsedTime();
+  const blinkOn = Math.floor(t * 2.5) % 2 === 0; // ~2.5 Hz toggle for "stuck" dots
+
   for (const g of laptopGroups.values()) {
+    const ud = g.userData;
+    // screen glow: steady when idle, gentle pulse while any agent works
+    const p = ud.working ? 0.5 + 0.5 * Math.sin(t * 2.4 + ud.phase) : 0;
+    ud.screen.material.emissiveIntensity = 0.45 + 0.6 * p;
+    ud.halo.material.opacity = 0.16 + 0.3 * p;
+
     let j = 0;
-    for (const card of g.userData.cards.values()) {
+    for (const card of ud.cards.values()) {
       card.position.y = (card.userData.baseY ?? 1.05) + Math.sin(t * 2 + j) * 0.03;
+      // only stuck cards redraw on blink; drawAgentCard is a no-op when nothing changed
+      if (card.userData.agent && agentState(card.userData.agent) === 'stuck') {
+        drawAgentCard(card, card.userData.agent, blinkOn);
+      }
       j++;
     }
   }
+
+  // gentle breathing on the table ring's glow layers
+  ringLayers.forEach((m, i) => {
+    if (i > 0) m.material.opacity = m.userData.baseOpacity * (0.85 + 0.15 * Math.sin(t * 1.3));
+  });
+
+  if (!renderer.xr.isPresenting) controls.update();
   renderer.render(scene, camera);
 });
 
