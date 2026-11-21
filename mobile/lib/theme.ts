@@ -69,14 +69,33 @@ export const laptopAccents = [
   '#7dd3fc', '#f0abfc', '#86efac', '#fcd34d', '#fca5a5', '#c4b5fd',
 ] as const;
 
-// Per-agent colors
+// Per-agent colors, keyed by base id ("claude-code · OnlyVibes › Explore" -> "claude-code")
 export const agentColors: Record<string, string> = {
   'vibe': '#7dd3fc',
   'claude-code': '#f0abfc',
   'codex': '#86efac',
   'cursor': '#fcd34d',
 };
-export const agentColor = (name: string) => agentColors[name] ?? '#e8ecf3';
+export const agentColor = (name: string) =>
+  agentColors[name.split(/[ ·›#]/)[0].trim()] ?? '#e8ecf3';
+
+// Orchestra task/project status colors
+export const taskStatusColors: Record<string, string> = {
+  backlog: '#8e8e93',
+  todo: '#0a84ff',
+  claimed: '#ff9f0a',
+  in_progress: '#ff9f0a',
+  review: '#bf5af2',
+  done: '#30d158',
+  failed: '#ff453a',
+  cancelled: '#8e8e93',
+};
+export const projectStatusColors: Record<string, string> = {
+  planning: '#ffd60a',
+  active: '#0a84ff',
+  done: '#30d158',
+  failed: '#ff453a',
+};
 
 // Per-state colors (server fill_agent() states)
 export const stateColors: Record<string, string> = {

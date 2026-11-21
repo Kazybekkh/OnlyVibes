@@ -31,13 +31,16 @@ Set a default hub without typing it in the app:
 EXPO_PUBLIC_SERVER_URL=http://100.64.0.11:8000 npx expo start
 ```
 
-## How it connects
+## How it connects (orchestra protocol v2, `shared/PROTOCOL.md`)
 
-- `WS <hub>/view` — the server's 2 Hz broadcast of the full snapshot
-  (`shared/schema.json` laptops + `team_summary` + `alerts` + `voice`).
-- Fallback: polls `GET <hub>/api/state` once per second (e.g. when the WS
-  can't upgrade over some networks).
-- Demo mode: built-in fake fleet, same shape as `web/index.html`'s fallback.
+- `WS <hub>/view` — 2 Hz `{type:"state", ts, laptops}` laptop fleet
+  (`shared/schema.json` agents: name/pid/cpu/cwd/last_log/summary/kind/task).
+- `GET <hub>/api/state` — polled every 2 s for the board fields
+  (`projects`, `tasks`, `workers`, `messages`) and merged with the WS fleet.
+- Agent `state` (working/idle/error/stuck) and the team headline are derived
+  client-side from cpu + log-line changes (orchestra servers send raw agents).
+- Fallback: REST-only polling when the WS can't connect. Demo mode runs fully
+  offline with a fake fleet + board.
 
 ## Layout
 
@@ -47,7 +50,8 @@ mobile/
 │   ├── _layout.tsx            # root stack, dark, safe-area
 │   ├── (tabs)/_layout.tsx     # floating Liquid Glass tab bar (expo-blur pill)
 │   ├── (tabs)/fleet/          # Fleet: team headline + laptop cards (large title)
-│   ├── (tabs)/alerts/         # collision alerts + voice turn
+│   ├── (tabs)/board/          # Board: projects, tasks (status+progress), workers
+│   ├── (tabs)/alerts/         # failed tasks, legacy collisions, agent messages
 │   ├── (tabs)/settings/       # hub URL, demo toggle, reconnect
 │   └── laptop/[key].tsx       # per-laptop detail: every agent, full log lines
 ├── components/                # Glass, Background, LaptopCard, AgentRow, StateChip, TeamHeader

@@ -2,7 +2,7 @@
 import { SymbolView } from 'expo-symbols';
 import { StyleSheet, Text, View } from 'react-native';
 import { agentColor, colors, type } from '../lib/theme';
-import type { Agent } from '../lib/types';
+import { agentBase, type Agent } from '../lib/types';
 import { StateChip } from './StateChip';
 
 const AGENT_ICONS: Record<string, string> = {
@@ -13,17 +13,22 @@ const AGENT_ICONS: Record<string, string> = {
 };
 
 export function AgentRow({ agent, showLog = false }: { agent: Agent; showLog?: boolean }) {
-  const c = agentColor(agent.name);
+  const base = agentBase(agent.name);
+  const c = agentColor(base);
   const cpu = Math.min(100, Math.max(0, agent.cpu || 0));
   return (
     <View style={styles.row}>
       <View style={[styles.iconTile, { backgroundColor: `${c}22` }]}>
-        <SymbolView name={(AGENT_ICONS[agent.name] ?? 'sparkles') as never} size={15} tintColor={c} />
+        <SymbolView name={(AGENT_ICONS[base] ?? 'sparkles') as never} size={15} tintColor={c} />
       </View>
       <View style={styles.body}>
         <View style={styles.head}>
           <Text style={[styles.name, { color: c }]} numberOfLines={1}>{agent.name}</Text>
-          <Text style={styles.pid}>pid {agent.pid}</Text>
+          {agent.kind === 'task' ? (
+            <Text style={styles.pid}>task</Text>
+          ) : (
+            <Text style={styles.pid}>pid {agent.pid}</Text>
+          )}
           <StateChip state={agent.state} />
         </View>
         <View style={styles.cpuTrack}>
