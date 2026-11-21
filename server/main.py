@@ -137,7 +137,11 @@ async def ws_reporter(websocket: WebSocket) -> None:
             except json.JSONDecodeError:
                 continue
             data.setdefault("ts", time.time())
-            key = data.get("tailscale_ip") or data.get("laptop") or "unknown"
+            # key by Tailscale IP; fall back to hostname when the IP is
+            # missing or just the loopback fallback from the reporter
+            key = (data.get("tailscale_ip") or "").strip()
+            if not key or key == "127.0.0.1":
+                key = data.get("laptop") or "unknown"
             # fill in summaries for agents that arrived without one,
             # going through the cache + rate limiter (get_summary)
             todo = [a for a in data.get("agents", []) if not a.get("summary") and a.get("last_log")]

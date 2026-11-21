@@ -64,16 +64,23 @@ SELF_PIDS = {os.getpid(), os.getppid()}
 _PROCS: dict[int, psutil.Process] = {}
 
 
+# `tailscale ip -4` via the PATH binary, or via the macOS app bundle when the
+# CLI is not on PATH (Tailscale.app ships its own CLI at this fixed location)
+TAILSCALE_CLI_CANDIDATES = [
+    ["tailscale", "ip", "-4"],
+    ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "ip", "-4"],
+]
+
+
 def tailscale_ip() -> str:
     """Best-effort Tailscale IPv4 address of this laptop."""
-    try:
-        out = subprocess.run(
-            ["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3
-        )
+    for cmd in TAILSCALE_CLI_CANDIDATES:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        except (FileNotFoundError, OSError):
+            continue  # not on PATH / not installed here -> try next candidate
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip().split()[0]
-    except Exception:
-        pass
     # fallback: local IP used for outbound traffic (on a Tailnet this is the
     # Tailscale IP; otherwise it is the LAN IP — still unique per laptop)
     try:
