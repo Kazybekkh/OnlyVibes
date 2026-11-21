@@ -143,7 +143,7 @@ speech-to-text (no spoken replies, no Q&A).
   stays open); Claude Code in any other terminal gets Ctrl-C (it exits) and then `claude -p --resume <session> "<prompt>"`
   continues the same conversation headless; orchestra task cards get the text in their inbox; other agents (codex, vibe,
   cursor...) are interrupted only, and the card says they can't take a voice prompt yet.
-- Buttons: A/X and stick click stay "Place laptops", trigger selects cards, squeeze summons the scene. Desktop / phone:
+- Buttons: trigger selects a card (or grabs the scene on empty space), squeeze re-centres the arc, stick scales/rotates. Desktop / phone:
   click a card, then the **Hold to talk** button or hold **Space**. `?ptt=<button index>` or `?ptt=trigger` overrides.
 - Fallback mic: `https://<hub>/mic?key=…` on a laptop or phone: pick the agent in the dropdown, hold to talk, same redirect.
 - The browser never sees the Mistral key: `/api/voice/token` (control key required) mints a short-lived `rt_*` token for

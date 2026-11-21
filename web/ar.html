@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>OnlyVibes — 3D / AR table</title>
+<title>OnlyVibes: AR agents</title>
 <link rel="icon" type="image/svg+xml" href="logo/mark.svg" />
 <style>
   html, body {
@@ -62,8 +62,6 @@
 <div id="app"></div>
 <div id="hud">
   <a id="back" href="./">&larr; Board</a>
-  <button id="placeBtn" class="hudbtn" type="button">📍 Place laptops</button>
-  <button id="clearLayoutBtn" class="hudbtn" type="button">Clear layout</button>
   <h1><img src="logo/onlyvibes-dark.svg" width="132" height="20" alt="OnlyVibes" /></h1>
   <p>live AI agents on every laptop · <span id="count">0</span> laptops · AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
 </div>
@@ -93,11 +91,11 @@ scene.background = new THREE.Color(0x101112);
 scene.fog = new THREE.Fog(0x0b0e14, 9, 24);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
-camera.position.set(0, 2.4, 5.4);
-camera.lookAt(0, 0.7, 0);
+camera.position.set(0, 2.0, 3.2);
+camera.lookAt(0, 1.0, -3.6);
 // browser: drag = rotate, scroll/pinch = zoom, right-drag/two-finger = pan
 const orbit = new OrbitControls(camera, renderer.domElement);
-orbit.target.set(0, 0.7, 0);
+orbit.target.set(0, 1.0, -3.6);
 orbit.enableDamping = true;
 orbit.minDistance = 1.5;
 orbit.maxDistance = 18;
@@ -112,28 +110,15 @@ const rim = new THREE.PointLight(0x66aaff, 10, 25);
 rim.position.set(-4, 3, -3);
 scene.add(rim);
 
-// ---------------------------------------------------------------- the table
+// ---------------------------------------------------------------- the scene
+// world origin = the viewer; each laptop is a column (laptop model, owner/device label, agent cards
+// stacked above) on an arc in front of you, grouped by owner. In AR the world is scaled down.
 const world = new THREE.Group();          // everything the AR session shows
 scene.add(world);
 
-const grid = new THREE.GridHelper(24, 24, 0x22304a, 0x131a29);
-grid.position.y = 0.001;
+const grid = new THREE.GridHelper(24, 24, 0x22304a, 0x131a29);  // desktop floor only (hidden in AR)
+grid.position.set(0, 0.001, -3);
 world.add(grid);
-
-const table = new THREE.Group();
-const top = new THREE.Mesh(
-  new THREE.CylinderGeometry(1.7, 1.7, 0.08, 48),
-  new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.55, metalness: 0.25 })
-);
-top.position.y = 0.75;
-table.add(top);
-const leg = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.08, 0.12, 0.75, 16),
-  new THREE.MeshStandardMaterial({ color: 0x1a1f2b, roughness: 0.8 })
-);
-leg.position.y = 0.375;
-table.add(leg);
-world.add(table);
 
 // ---------------------------------------------------------------- text cards
 function roundRect(ctx, x, y, w, h, r) {
@@ -436,21 +421,22 @@ function buildLaptop(status, idx) {
   return g;
 }
 
-// unplaced laptops: a ring on the miniature table (laptop +z faces the table centre)
-function ringLayout(entries, radius) {
-  const n = Math.max(entries.length, 1);
-  entries.forEach(([_key, g], i) => {
-    const a = (i / n) * Math.PI * 2;
-    if (g.parent !== world) world.add(g);
-    g.scale.setScalar(1);
-    g.position.set(Math.cos(a) * radius, 0.78, Math.sin(a) * radius); // sit on the table top
-    g.rotation.set(0, Math.atan2(-g.position.x, -g.position.z), 0);
+// simple layout: laptop columns on an arc around the viewer (world origin), sorted by owner so one
+// person's laptops sit side by side; each column faces the viewer
+const ARC_RADIUS = 4, COLUMN_GAP = 2.5;  // gap > card width (~2.3), so columns never overlap
+function relayout() {
+  const gs = [...laptopGroups.values()].sort((x, y) =>
+    String(x.userData.owner || '').localeCompare(String(y.userData.owner || '')) || String(x.userData.key).localeCompare(String(y.userData.key)));
+  const step = COLUMN_GAP / ARC_RADIUS, n = gs.length;
+  gs.forEach((g, i) => {
+    const ang = (i - (n - 1) / 2) * step;
+    g.position.set(Math.sin(ang) * ARC_RADIUS, 0, -Math.cos(ang) * ARC_RADIUS);
+    g.rotation.set(0, -ang, 0);
   });
 }
 
 function applyState(snap) {
   const seen = new Set();
-  if (snap.layout) setLayout(snap.layout);
   (snap.laptops || []).forEach((st) => {
     const key = st.tailscale_ip || st.laptop;
     seen.add(key);
@@ -463,10 +449,10 @@ function applyState(snap) {
       g.userData.owner = st.owner;
       relayout();
     }
-    g.userData.owner = st.owner;
+    if (g.userData.owner !== st.owner) { g.userData.owner = st.owner; relayout(); }
     g.userData.device = st.device || {};
     setLaptopModel(g, g.userData.device);
-    setOwnerTag(g.userData.label, st.owner, g.userData.device, g.userData.accentHex, viewerDistanceText(g), true);
+    setOwnerTag(g.userData.label, st.owner, g.userData.device, g.userData.accentHex, '', true);
 
     const cards = g.userData.cards;
     const names = new Set();
@@ -538,12 +524,14 @@ connect();
 const arButton = ARButton.createButton(renderer, { optionalFeatures: ['hit-test', 'local-floor'] });
 arButton.textContent = '📱 Enter AR';
 document.body.appendChild(arButton);
-// in AR ('local' space: origin at the viewer, -z is forward): shrink the whole
-// world to a tabletop miniature, 0.8m in front of the viewer at chest height
+// in AR ('local' space: origin at the viewer, -z is forward): scale the world down so the arc sits
+// ~0.5 m in front of you, cards around eye level
+const AR_SCALE = 0.13;
 renderer.xr.addEventListener('sessionstart', () => {
-  world.scale.setScalar(0.15);
-  world.position.set(0, -0.3, -0.8);
-  setTimeout(summonWorld, 300); // once the headset pose is known, put it right in front of you
+  world.scale.setScalar(AR_SCALE);
+  world.position.set(0, -0.3, 0);
+  grid.visible = false;
+  setTimeout(summonWorld, 300); // once the headset pose is known, centre the arc on you
   const xs = renderer.xr.getSession();
   if (PTT === 'trigger' && xs) {  // opt-in: trigger = talk (select the card on desktop first)
     xs.addEventListener('selectstart', () => pttDown());
@@ -551,21 +539,13 @@ renderer.xr.addEventListener('sessionstart', () => {
   }
   voice?.log({ ev: 'xr-start', ptt: PTT });
   if (voiceCard.visible) setVoiceText(lastVoiceText);  // rescale for AR
-  resetPlacementSession();
-  setTimeout(() => {
-    if (placeOnEnter) { placeOnEnter = false; startPlacement(); }
-    else flashPrompt((Object.keys(layoutData.laptops || {}).length
-      ? 'Saved table layout found: hold squeeze (or press A/X) to re-place the reference laptops'
-      : 'Hold squeeze (or press A/X) to place the laptops on your real table'
-      ) + (voiceOn ? '\nVoice: select an agent, hold B/Y, speak its new prompt' : ''), 6000);
-  }, 600);
+  setTimeout(() => setVoiceText('Trigger a card to select it' + (voiceOn ? '\nhold B/Y and speak to give it a new prompt' : ''), 'ready', 6000), 600);
 });
 renderer.xr.addEventListener('sessionend', () => {
   world.scale.setScalar(1);
   world.position.set(0, 0, 0);
   world.rotation.set(0, 0, 0);
-  placement.active = false;
-  resetPlacementSession();
+  grid.visible = true;
   if (voiceCard.visible) setVoiceText(lastVoiceText);  // rescale for desktop
 });
 
@@ -573,7 +553,7 @@ renderer.xr.addEventListener('sessionend', () => {
 // trigger (hold) = grab the whole scene and move it with your hand
 // grip/squeeze   = summon the scene to 0.5m in front of your face
 // thumbstick     = up/down scales, left/right rotates
-// hold squeeze 0.8 s, or A/X, or stick click = Place laptops on the real table (on / done)
+// B/Y (hold)     = push-to-talk voice prompt to the selected card
 const controllers = [];
 for (let i = 0; i < 2; i++) {
   const c = renderer.xr.getController(i);
@@ -587,14 +567,11 @@ for (let i = 0; i < 2; i++) {
   c.addEventListener('disconnected', () => { c.userData.source = null; });
   // trigger: on a card/button = select/press it; on empty space = grab the world (as before)
   c.addEventListener('selectstart', () => {
-    if (placement.active) { placementTrigger(c); return; }
     if (pick(rayFromController(c))) return;
     if (!world.userData.grabbedBy) { c.attach(world); world.userData.grabbedBy = c; }
   });
   c.addEventListener('selectend', () => { if (world.userData.grabbedBy === c) { scene.attach(world); world.userData.grabbedBy = null; } });
-  // squeeze: short press = summon the miniature (on release); hold 0.8 s = Place laptops on/off
-  c.addEventListener('squeezestart', () => { c.userData.squeezeT = performance.now(); c.userData.squeezeLong = false; });
-  c.addEventListener('squeezeend', () => { if (c.userData.squeezeT && !c.userData.squeezeLong) summonWorld(); c.userData.squeezeT = 0; });
+  c.addEventListener('squeezestart', () => summonWorld());
   scene.add(c);
   controllers.push(c);
 }
@@ -604,8 +581,8 @@ function summonWorld() {
   const xrCam = renderer.xr.getCamera();
   xrCam.getWorldPosition(_camPos);
   xrCam.getWorldDirection(_fwd); _fwd.y = 0; _fwd.normalize();
-  world.position.copy(_camPos).addScaledVector(_fwd, 0.5);
-  world.position.y = _camPos.y - 0.35;
+  world.position.copy(_camPos);   // arc is centred on you
+  world.position.y = _camPos.y - 0.3;
   world.rotation.set(0, Math.atan2(-_fwd.x, -_fwd.z), 0);
 }
 function pollSticks(dt) {
@@ -628,7 +605,7 @@ const CONTROL_KEY = new URLSearchParams(location.search).get('key') || '';
 // Select an agent card (trigger / click) = voice target. Hold B/Y (xr-standard gamepad button 5) and speak;
 // on release Voxtral transcribes it, the card shows the transcript for 2 s (press B/Y again to cancel), then
 // POST /api/control action=redirect interrupts that agent and sends the transcript as its new prompt.
-// Not A/X (4) or stick click (3): those toggle Place laptops. ?ptt=<button index>|trigger overrides.
+// ?ptt=<button index>|trigger overrides.
 // Desktop / phone: the "Hold to talk" button or hold Space.
 const vparams = new URLSearchParams(location.search);
 const PTT = vparams.get('ptt') || '5';
@@ -748,7 +725,7 @@ const _vP = new THREE.Vector3(), _vF = new THREE.Vector3(), _vQ = new THREE.Quat
 function updateVoiceCard(cam) {
   if (!voiceCard.visible) return;
   cam.getWorldPosition(_vP); cam.getWorldQuaternion(_vQ);
-  // a bit ABOVE eye line, so it doesn't sit on the placement prompt (which is below)
+  // a bit above eye line, so it doesn't cover the cards
   _vF.set(0, 0.22, -1).normalize().applyQuaternion(_vQ);
   voiceCard.position.copy(_vP).addScaledVector(_vF, renderer.xr.isPresenting ? 0.7 : 2.2);
 }
@@ -939,310 +916,13 @@ function updateRays() {
   }
 }
 
-// ---------------------------------------------------------------- real-table placement (AR)
-// Placed laptops live in `placedRoot`, which is never moved or scaled, so they sit at real
-// positions (metres) in the session's WebXR 'local' space; unplaced ones stay in the
-// scalable miniature `world`. Saved layout = metres in a frame anchored on reference
-// laptops: ref[0] is the origin and the direction ref[0] -> ref[1] fixes the rotation.
-// WebXR 'local' space changes every session, so in a new session you re-place just those
-// two (after touching the table once for its height) and every other laptop snaps in.
-const PLACED_SCALE = 0.3;      // placed group: 0.62 m model -> ~19 cm, cards ~57 cm wide
-const DESK_LAYOUT_SCALE = 4;   // desktop preview: 1 real metre = 4 scene units (cards need room)
-const UP = new THREE.Vector3(0, 1, 0);
-const placedRoot = new THREE.Group();
-scene.add(placedRoot);
-let layoutData = { ref: [], laptops: {} };
-let layoutSig = '';
-const sessionPos = new Map(); // key -> Vector3, placed in THIS XR session (reference space)
-const placement = { active: false, step: 'table', queue: [], current: null, tableY: null };
-let anchor = null;            // { origin: Vector3, beta } maps layout frame -> this session's space
-let placeOnEnter = false;
-
-function setLayout(l) {
-  const sig = JSON.stringify([l.ref, l.laptops]);
-  if (sig === layoutSig) return;
-  layoutSig = sig;
-  layoutData = { ref: Array.isArray(l.ref) ? l.ref : [], laptops: l.laptops || {} };
-  computeAnchor();
-  relayout();
-}
-function resetPlacementSession() {
-  sessionPos.clear();
-  anchor = null;
-  placement.tableY = null;
-  placement.queue = []; placement.current = null;
-  relayout();
-}
-function ownerOf(key) {
-  const g = laptopGroups.get(key);
-  return (g && g.userData.owner) || (layoutData.laptops[key] || {}).owner || key;
-}
-const toXR = (r) => new THREE.Vector3(
-  anchor.origin.x + r.x * Math.cos(anchor.beta) - r.z * Math.sin(anchor.beta),
-  anchor.origin.y + (r.y || 0),
-  anchor.origin.z + r.x * Math.sin(anchor.beta) + r.z * Math.cos(anchor.beta));
-function fromXR(p) {
-  const dx = p.x - anchor.origin.x, dz = p.z - anchor.origin.z;
-  return { x: dx * Math.cos(anchor.beta) + dz * Math.sin(anchor.beta), y: p.y - anchor.origin.y,
-           z: -dx * Math.sin(anchor.beta) + dz * Math.cos(anchor.beta) };
-}
-// anchor from the reference laptops placed in this session (both needed if there are two)
-function computeAnchor() {
-  anchor = null;
-  const [a, b] = layoutData.ref || [];
-  if (!a || !sessionPos.has(a)) return;
-  if (b && layoutData.laptops[b] && !sessionPos.has(b)) return;
-  const origin = sessionPos.get(a).clone();
-  let beta = 0;
-  if (b && sessionPos.has(b) && layoutData.laptops[b]) {
-    const d = sessionPos.get(b).clone().sub(origin), lb = layoutData.laptops[b];
-    beta = Math.atan2(d.z, d.x) - Math.atan2(lb.z, lb.x);
-  }
-  anchor = { origin, beta };
-}
-function xrPosOf(key) {
-  if (sessionPos.has(key)) return sessionPos.get(key);
-  if (anchor && layoutData.laptops[key]) return toXR(layoutData.laptops[key]);
-  return null;
-}
-function centroidOf(ps) {
-  const c = new THREE.Vector3();
-  ps.forEach((p) => c.add(p));
-  return ps.length ? c.multiplyScalar(1 / ps.length) : c;
-}
-// +z of a laptop model points at its user; real laptops face away from the table centre
-function faceAway(g, p, c) {
-  const dx = p.x - c.x, dz = p.z - c.z;
-  if (dx * dx + dz * dz > 1e-6) g.rotation.set(0, Math.atan2(dx, dz), 0);
-}
-
-function relayout() {
-  const xr = renderer.xr.isPresenting;
-  const entries = [...laptopGroups.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-  const placed = [], unplaced = [];
-  if (xr) {
-    for (const [k, g] of entries) { const p = xrPosOf(k); (p ? placed.push([k, g, p.clone()]) : unplaced.push([k, g])); }
-  } else {
-    const keys = entries.map(([k]) => k).filter((k) => layoutData.laptops[k]);
-    const c = centroidOf(keys.map((k) => new THREE.Vector3(layoutData.laptops[k].x, 0, layoutData.laptops[k].z)));
-    for (const [k, g] of entries) {
-      const r = layoutData.laptops[k];
-      if (!r) { unplaced.push([k, g]); continue; }
-      placed.push([k, g, new THREE.Vector3((r.x - c.x) * DESK_LAYOUT_SCALE, 0.78, (r.z - c.z) * DESK_LAYOUT_SCALE)]);
-    }
-  }
-  const container = xr ? placedRoot : world;
-  const c = centroidOf(placed.map(([, , p]) => p));
-  for (const [, g, p] of placed) {
-    if (g.parent !== container) container.add(g);
-    g.scale.setScalar(xr ? PLACED_SCALE : 1);
-    g.position.copy(p);
-    if (placed.length > 1) faceAway(g, p, c);
-    else if (xr) { const cam = new THREE.Vector3(); renderer.xr.getCamera().getWorldPosition(cam); faceAway(g, cam, p); }
-    g.userData.placed = true;
-  }
-  for (const [, g] of unplaced) g.userData.placed = false;
-  ringLayout(unplaced, placed.length && !xr ? 3.6 : 2.5);
-  table.visible = !(xr && placed.length && !unplaced.length);
-  rebuildLines(placed, container, xr);
-}
-
-// ---- distance lines between every pair of placed laptops, labelled in real metres
-const lineGroup = new THREE.Group();
-function makeTag(text, heightWorld) {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  ctx.font = '600 56px ui-sans-serif, system-ui, sans-serif';
-  canvas.width = Math.ceil(ctx.measureText(text).width) + 40; canvas.height = 84;
-  ctx.fillStyle = 'rgba(10,14,22,0.85)'; roundRect(ctx, 0, 0, canvas.width, canvas.height, 18); ctx.fill();
-  ctx.font = '600 56px ui-sans-serif, system-ui, sans-serif'; ctx.fillStyle = '#ffe680';
-  ctx.fillText(text, 20, 62);
-  const tex = new THREE.CanvasTexture(canvas);
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  sp.scale.set(heightWorld * canvas.width / canvas.height, heightWorld, 1);
-  return sp;
-}
-function realMetres(ka, kb, pa, pb, xr) {
-  if (xr) return pa.distanceTo(pb);
-  const a = layoutData.laptops[ka], b = layoutData.laptops[kb];
-  return Math.hypot(a.x - b.x, (a.y || 0) - (b.y || 0), a.z - b.z);
-}
-function rebuildLines(placed, container, xr) {
-  for (const ch of [...lineGroup.children]) {
-    lineGroup.remove(ch);
-    if (ch.geometry) ch.geometry.dispose();
-    if (ch.material) { if (ch.material.map) ch.material.map.dispose(); ch.material.dispose(); }
-  }
-  if (lineGroup.parent !== container) container.add(lineGroup);
-  const lift = xr ? 0.01 : 0.03;
-  for (let i = 0; i < placed.length; i++) {
-    for (let j = i + 1; j < placed.length; j++) {
-      const [ka, , pa] = placed[i], [kb, , pb] = placed[j];
-      const a = pa.clone(), b = pb.clone(); a.y += lift; b.y += lift;
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]),
-        new THREE.LineBasicMaterial({ color: 0xffe680, transparent: true, opacity: 0.8 }));
-      lineGroup.add(line);
-      const tag = makeTag(`${realMetres(ka, kb, pa, pb, xr).toFixed(2)} m`, xr ? 0.035 : 0.22);
-      tag.position.copy(a).add(b).multiplyScalar(0.5);
-      tag.position.y += xr ? 0.03 : 0.18;
-      lineGroup.add(tag);
-    }
-  }
-}
-const _vd = new THREE.Vector3(), _vc = new THREE.Vector3();
-function viewerDistanceText(g) {
-  if (!renderer.xr.isPresenting || !g.userData.placed) return '';
-  renderer.xr.getCamera().getWorldPosition(_vc);
-  g.getWorldPosition(_vd);
-  return ` · ${_vd.distanceTo(_vc).toFixed(1)} m`;
-}
-
-// ---- placement flow (trigger steps), prompt card in front of the headset
-const promptCard = makeCard({ fontPx: 26, bg: 'rgba(30,24,6,0.92)', fg: '#ffe680', scaleMul: 0.2 });
-promptCard.visible = false;
-scene.add(promptCard);
-let promptUntil = 0;
-function showPrompt(text) {
-  setCardText(promptCard, text);
-  promptCard.visible = renderer.xr.isPresenting;
-  statusEl.textContent = text.replace(/\n/g, ' · ');
-  statusHoldUntil = performance.now() + 4000;
-}
-function flashPrompt(text, ms = 3500) { showPrompt(text); promptUntil = performance.now() + ms; }
-function updatePrompt() {
-  if (!placement.active) return;
-  promptUntil = 0;
-  if (placement.step === 'table') return showPrompt('Place laptops 1/2\nRest a controller on the table and pull the trigger');
-  if (!placement.current) return showPrompt('All placed. Point at a laptop to move it, or hold squeeze to finish');
-  const left = placement.queue.length;
-  showPrompt(`Point at ${ownerOf(placement.current)}'s laptop on the table and pull the trigger` +
-             `\n${left ? left + ' more after this' : 'last one'} · point at a placed laptop to move it · hold squeeze = done`);
-}
-function startPlacement() {
-  if (!renderer.xr.isPresenting) { placeOnEnter = true; statusEl.textContent = 'Enter AR: placement starts right away'; statusHoldUntil = performance.now() + 5000; return; }
-  if (world.userData.grabbedBy) { scene.attach(world); world.userData.grabbedBy = null; }
-  closePanel();
-  placement.active = true;
-  placement.step = placement.tableY == null ? 'table' : 'laptop';
-  const online = [...laptopGroups.keys()].sort();
-  const ref = (layoutData.ref || []).filter((k) => layoutData.laptops[k]);
-  if (ref.length && !anchor) {
-    // saved layout: re-place the reference laptops, everything saved snaps in; then the new ones
-    placement.queue = [...ref, ...online.filter((k) => !layoutData.laptops[k] && !ref.includes(k))];
-  } else {
-    placement.queue = online.filter((k) => !xrPosOf(k));
-    if (!placement.queue.length) placement.queue = online;
-  }
-  placement.current = placement.queue.shift() || null;
-  updatePrompt();
-}
-function laptopUnderRay(ray) {
-  raycaster.ray.copy(ray);
-  raycaster.camera = renderer.xr.getCamera();
-  const hit = raycaster.intersectObjects([...laptopGroups.values()], true)[0];
-  for (let o = hit && hit.object; o; o = o.parent) if (o.userData && o.userData.key && laptopGroups.get(o.userData.key) === o) return o.userData.key;
-  return null;
-}
-const _tablePlane = new THREE.Plane();
-function placementTrigger(c) {
-  const ray = rayFromController(c);
-  if (placement.step === 'table') {
-    placement.tableY = new THREE.Vector3().setFromMatrixPosition(c.matrixWorld).y - 0.02;
-    placement.step = 'laptop';
-    return updatePrompt();
-  }
-  const hitKey = laptopUnderRay(ray);
-  if (hitKey && hitKey !== placement.current) { // re-place that one next
-    if (placement.current) placement.queue.unshift(placement.current);
-    placement.queue = placement.queue.filter((k) => k !== hitKey);
-    placement.current = hitKey;
-    return updatePrompt();
-  }
-  if (!placement.current) return updatePrompt();
-  _tablePlane.set(UP, -placement.tableY);
-  const p = ray.intersectPlane(_tablePlane, new THREE.Vector3());
-  if (!p || p.distanceTo(ray.origin) > 8) return flashPrompt('Aim down at the table top and pull the trigger', 2500);
-  sessionPos.set(placement.current, p);
-  computeAnchor();
-  relayout();
-  placement.current = placement.queue.shift() || null;
-  if (!placement.current && !placement.queue.length) return finishPlacement();
-  updatePrompt();
-}
-async function finishPlacement() {
-  placement.active = false;
-  if (!sessionPos.size) { promptCard.visible = false; return; }
-  // keep the saved frame if this session is anchored to it; else the first two placed define it
-  let laptops = {};
-  let ref = layoutData.ref || [];
-  if (anchor) laptops = { ...layoutData.laptops };
-  else {
-    ref = [...sessionPos.keys()].slice(0, 2);
-    const o = sessionPos.get(ref[0]);
-    const d = ref[1] ? sessionPos.get(ref[1]).clone().sub(o) : new THREE.Vector3(1, 0, 0);
-    anchor = { origin: o.clone(), beta: Math.atan2(d.z, d.x) };
-  }
-  const keys = new Set([...Object.keys(laptops), ...sessionPos.keys()]);
-  const xs = [...keys].map((k) => [k, xrPosOf(k)]).filter(([, p]) => p);
-  const c = centroidOf(xs.map(([, p]) => p));
-  for (const [k, p] of xs) {
-    const r = fromXR(p);
-    laptops[k] = { x: r.x, y: r.y, z: r.z, yaw: Math.atan2(p.x - c.x, p.z - c.z) - anchor.beta, owner: ownerOf(k) };
-  }
-  // rebase stored points to this session's anchor so session positions and saved ones agree
-  layoutData = { ref, laptops };
-  layoutSig = JSON.stringify([ref, laptops]);
-  relayout();
-  try {
-    const url = CONTROL_KEY ? `api/layout?key=${encodeURIComponent(CONTROL_KEY)}` : 'api/layout';
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-OV-Key': CONTROL_KEY }, body: JSON.stringify({ ref, laptops }) });
-    flashPrompt(res.ok ? `Laptops placed and saved ✓ (${xs.length})` : `Placed for this session only (save failed: ${res.status === 403 ? 'open /ar?key=…' : 'HTTP ' + res.status})`, 5000);
-  } catch {
-    flashPrompt('Placed for this session only (hub unreachable)', 5000);
-  }
-}
-function togglePlacement() { if (placement.active) finishPlacement(); else startPlacement(); }
-const _btnWas = new Map();
-function pollPlacementButtons() {
-  const t = performance.now();
-  for (const c of controllers) {
-    if (c.userData.squeezeT && !c.userData.squeezeLong && t - c.userData.squeezeT > 800) { c.userData.squeezeLong = true; togglePlacement(); }
-    const gp = c.userData.source && c.userData.source.gamepad;
-    if (!gp || !gp.buttons) continue;
-    const down = !!((gp.buttons[4] && gp.buttons[4].pressed) || (gp.buttons[3] && gp.buttons[3].pressed));
-    if (down && !_btnWas.get(c)) togglePlacement();
-    _btnWas.set(c, down);
-  }
-}
-const _pq = new THREE.Vector3(), _pf = new THREE.Vector3();
-function updatePromptCard() {
-  if (!renderer.xr.isPresenting) { promptCard.visible = false; return; }
-  if (!placement.active && promptUntil && performance.now() > promptUntil) { promptCard.visible = false; promptUntil = 0; }
-  if (!promptCard.visible) return;
-  const xrCam = renderer.xr.getCamera();
-  xrCam.getWorldPosition(_pq); xrCam.getWorldDirection(_pf);
-  promptCard.position.copy(_pq).addScaledVector(_pf, 0.7);
-  promptCard.position.y -= 0.12;
-}
-document.getElementById('placeBtn').addEventListener('click', () => togglePlacement());
-document.getElementById('clearLayoutBtn').addEventListener('click', async () => {
-  if (!confirm('Clear the saved real-table layout for everyone?')) return;
-  const url = CONTROL_KEY ? `api/layout?key=${encodeURIComponent(CONTROL_KEY)}` : 'api/layout';
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-OV-Key': CONTROL_KEY }, body: JSON.stringify({ ref: [], laptops: {} }) });
-  statusEl.textContent = res.ok ? 'layout cleared' : (res.status === 403 ? 'locked: open /ar?key=…' : `HTTP ${res.status}`);
-  statusHoldUntil = performance.now() + 4000;
-});
-fetch('api/layout').then((r) => r.json()).then(setLayout).catch(() => {});
-window.__ovLayout = { setLayout, relayout, startPlacement, placement, sessionPos };
-
 // ---------------------------------------------------------------- loop / resize
 const clock = new THREE.Clock();
 const _camQ = new THREE.Quaternion(), _parentQ = new THREE.Quaternion();
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   const t = clock.elapsedTime;
-  if (renderer.xr.isPresenting) { pollSticks(dt); updateRays(); pollPlacementButtons(); pollVoiceButtons(); } else orbit.update();
-  updatePromptCard();
+  if (renderer.xr.isPresenting) { pollSticks(dt); updateRays(); pollVoiceButtons(); } else orbit.update();
   // active camera: XR headset camera while presenting, desktop camera otherwise
   const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   cam.getWorldQuaternion(_camQ);
