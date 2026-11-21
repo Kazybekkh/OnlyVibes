@@ -45,6 +45,32 @@ app = FastAPI(title="OnlyVibes server")
 states: dict[str, dict] = {}
 lock = asyncio.Lock()
 
+# summary cache: (laptop_key, agent_name) -> (last_log, summary).
+# Mistral is only called when last_log CHANGED since the last call.
+summary_cache: dict[tuple[str, str], tuple[str, str]] = {}
+# rate limit: (laptop_key, agent_name) -> ts of last Mistral call
+# (at most 1 Mistral call per agent per RATE_LIMIT_S seconds)
+summary_rate: dict[tuple[str, str], float] = {}
+RATE_LIMIT_S = 5.0
+
+
+async def get_summary(laptop_key: str, agent: dict) -> str:
+    """Summary for one agent, using the cache + rate limit around summarize()."""
+    name = agent.get("name", "")
+    log = (agent.get("last_log") or "").strip()
+    key = (laptop_key, name)
+    cached = summary_cache.get(key)
+    if cached and cached[0] == log:
+        return cached[1]  # unchanged log -> reuse cached summary, no API call
+    if time.time() - summary_rate.get(key, 0.0) < RATE_LIMIT_S:
+        # rate-limited: reuse the previous summary (or a local fallback), no call
+        return cached[1] if cached else log[:120]
+    summary_rate[key] = time.time()
+    print(f"[summarize] Mistral call for {laptop_key}/{name}")
+    s = await summarize(log)
+    summary_cache[key] = (log, s)
+    return s
+
 
 async def summarize(last_log: str) -> str:
     """
@@ -111,13 +137,14 @@ async def ws_reporter(websocket: WebSocket) -> None:
             except json.JSONDecodeError:
                 continue
             data.setdefault("ts", time.time())
-            # fill in summaries for agents that arrived without one
+            key = data.get("tailscale_ip") or data.get("laptop") or "unknown"
+            # fill in summaries for agents that arrived without one,
+            # going through the cache + rate limiter (get_summary)
             todo = [a for a in data.get("agents", []) if not a.get("summary") and a.get("last_log")]
             if todo:
-                sums = await asyncio.gather(*(summarize(a["last_log"]) for a in todo))
+                sums = await asyncio.gather(*(get_summary(key, a) for a in todo))
                 for a, s in zip(todo, sums):
                     a["summary"] = s
-            key = data.get("tailscale_ip") or data.get("laptop") or "unknown"
             async with lock:
                 states[key] = data
     except WebSocketDisconnect:
