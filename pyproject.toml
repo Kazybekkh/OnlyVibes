@@ -11,10 +11,11 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "httpx>=0.27",
-    # voice/ (mic/speaker backends; API client itself is stdlib-only)
+    # voice/ (mic/speaker backends + official SDK for realtime Voxtral)
     "sounddevice>=0.4.6",
     "numpy>=1.24",
     "soundfile>=0.12",
+    "mistralai[realtime]>=1.0",
 ]
 
 [project.scripts]

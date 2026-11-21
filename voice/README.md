@@ -52,9 +52,36 @@ See `examples/plug_into_app.py` (level 3 runs fully offline).
 
 ```bash
 python -m voice                          # press Enter, talk, hear the reply
+python -m voice --realtime               # near-real-time streaming loop (mic required)
 python -m voice --text "What time is it?" --no-play
 python -m voice --turns 3 --language en
 ```
+
+## Near-real-time mode (`--realtime`)
+
+Every stage streams, via the official `mistralai[realtime]` SDK:
+
+```
+ mic (VAD, 100ms chunks) → Voxtral Mini Transcribe Realtime 3 (WS, live deltas)
+   → streaming chat tokens → Voxtral Mini TTS 3 realtime (WS, pcm chunks) → speaker
+```
+
+Measured live (headless test, audio streamed as fast as possible):
+transcript deltas from **0.84s**, realtime-TTS first audio from **1.16s**,
+full turn heard→spoken-reply in **3.65s**. With a real mic the stages overlap
+with the user speaking.
+
+```python
+from voice import RealtimeVoiceAgent
+agent = RealtimeVoiceAgent()             # all defaults, still fully pluggable
+turn = asyncio.run(agent.turn())        # or await agent.converse(turns=3)
+print(agent.last_timings)                # transcript/first-audio/total seconds
+```
+
+Latency knobs: `StreamingRecorder(silence_timeout=0.8, energy_threshold=...)`,
+`SdkRealtimeSTT(target_streaming_delay_ms=480)` (lower = snappier transcript,
+less accurate), `SdkRealtimeTTS` uses `streaming_mode="responsive"` +
+`response_format="pcm"` (24 kHz mono).
 
 ## The plug points (protocols in `voice/interface.py`)
 
