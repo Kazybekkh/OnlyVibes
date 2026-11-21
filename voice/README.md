@@ -59,9 +59,24 @@ python -m voice --turns 3 --language en
 ```
 
 `--ptt` listens globally for the right Option key (pynput, `Key.alt_r` /
-VK 0x3E). On macOS grant Accessibility permission to your terminal first
-(System Settings → Privacy & Security → Accessibility). Tested with the real
-mic: audio flows only while the key is held (first chunk ~0.13s after key-down).
+VK 0x3E). Tested with the real mic: audio flows only while the key is held
+(first chunk ~0.13s after key-down).
+
+**macOS permission ("process is not trusted"):** the trusted process is the
+Python binary itself, not your terminal. Under `uv run` that is the resolved
+real path of `.venv/bin/python3`, e.g.
+`~/.local/share/uv/python/cpython-3.12.11-macos-aarch64-none/bin/python3.12`
+(the exact path is printed in the error). Add it to **both**:
+System Settings → Privacy & Security → **Accessibility** and → **Input
+Monitoring** → "+" → paste the path. Then **restart** the voice process.
+Open the pane directly:
+
+```bash
+open 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility'
+```
+
+If you skip this, just run `--realtime` without `--ptt` — VAD mode needs no
+special permissions.
 
 ## Near-real-time mode (`--realtime`)
 

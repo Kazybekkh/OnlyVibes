@@ -40,6 +40,8 @@ class PushToTalk:
                 self.pressed.set if value else self.pressed.clear)
 
     def start(self) -> None:
+        import os
+        import sys
         from pynput import keyboard
         self._loop = asyncio.get_event_loop()
         try:
@@ -49,10 +51,19 @@ class PushToTalk:
             )
             self._listener.start()
         except Exception as e:
+            real = os.path.realpath(sys.executable)
             raise RuntimeError(
-                "Could not start the global hotkey listener. On macOS, grant "
-                "Accessibility permission to your terminal (System Settings -> "
-                "Privacy & Security -> Accessibility). "
+                "macOS blocked the global hotkey listener ('process is not "
+                "trusted'). The process to trust is the Python binary ITSELF, "
+                "not the terminal:\n"
+                f"  {real}\n"
+                "Add it here: System Settings -> Privacy & Security -> "
+                "Accessibility (AND -> Input Monitoring) -> '+' -> paste that "
+                "path. Then RESTART this process (permission applies at exec).\n"
+                "Open the pane directly: open 'x-apple.systempreferences:"
+                "com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility'\n"
+                "No permission needed? Run without --ptt (VAD mode listens "
+                "automatically).\n"
                 f"Underlying error: {e}") from e
 
     async def wait_pressed(self) -> None:
