@@ -15,11 +15,13 @@ import { Background } from '../../../components/Background';
 import { Glass } from '../../../components/Glass';
 import { colors, radius, type } from '../../../lib/theme';
 import { normalizeUrl, setServerConfig, useServerConfig } from '../../../lib/server';
+import { useAgo } from '../../../lib/useAgo';
 import { useOnlyVibes } from '../../../lib/useOnlyVibes';
 
 export default function SettingsScreen() {
   const cfg = useServerConfig();
   const { status, lastSeen } = useOnlyVibes(cfg.url, cfg.demo, cfg.nonce);
+  const ago = useAgo(lastSeen);
   const [draft, setDraft] = useState(cfg.url);
   const norm = normalizeUrl(draft);
 
@@ -70,7 +72,7 @@ export default function SettingsScreen() {
             <View style={[styles.dot, { backgroundColor: statusColor(status) }]} />
             <Text style={styles.statusText}>
               {status}
-              {lastSeen ? ` · updated ${Math.max(0, Math.round((Date.now() - lastSeen) / 1000))}s ago` : ''}
+              {!!ago && ` · updated ${ago}`}
             </Text>
           </View>
         </Glass>
@@ -96,7 +98,7 @@ export default function SettingsScreen() {
           <Text style={styles.aboutTitle}>OnlyVibes</Text>
           <Text style={styles.aboutBody}>
             Live view of which AI coding agents (Vibe, Claude Code, Codex, Cursor) are running on each
-            teammate's laptop over Tailscale. This app connects to the hub server's /view WebSocket
+            teammate&apos;s laptop over Tailscale. This app connects to the hub server&apos;s /view WebSocket
             (falling back to /api/state polling) and renders the same snapshot as the web 3D view.
           </Text>
           <Text style={styles.aboutFoot}>
@@ -122,7 +124,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 120, gap: 12 },
-  sectionTitle: { ...type.title2, color: colors.label, marginTop: 10, marginBottom: -2, paddingHorizontal: 4 },
+  sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label, marginTop: 10, marginBottom: -2, paddingHorizontal: 4 },
   card: { padding: 16, gap: 10 },
   label: { ...type.subhead, fontWeight: '600', color: colors.label },
   input: {
@@ -151,7 +153,7 @@ const styles = StyleSheet.create({
   statusText: { ...type.caption2, color: colors.labelSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   switchLabel: { ...type.headline, color: colors.label },
-  aboutTitle: { ...type.title3, color: colors.label },
+  aboutTitle: { ...type.title3, fontWeight: '600', color: colors.label },
   aboutBody: { ...type.subhead, color: colors.labelSecondary, lineHeight: 21 },
   aboutFoot: { ...type.caption1, color: colors.labelTertiary, fontFamily: 'Menlo' },
 });

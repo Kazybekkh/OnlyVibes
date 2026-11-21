@@ -43,7 +43,7 @@ export default function LaptopDetail() {
           <Text style={styles.meta}>owner {laptop.owner}</Text>
           <Text style={styles.meta}>tailscale {laptop.tailscale_ip}</Text>
           <Text style={styles.meta}>
-            last report {new Date((laptop.ts || Date.now() / 1000) * 1000).toLocaleTimeString()}
+            last report {laptop.ts ? new Date(laptop.ts * 1000).toLocaleTimeString() : '—'}
           </Text>
         </Glass>
 
@@ -68,9 +68,9 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 60, gap: 12 },
   card: { padding: 16, gap: 8 },
-  name: { ...type.title2 },
+  name: { ...type.title2, fontWeight: '700' },
   meta: { ...type.subhead, color: colors.labelSecondary },
-  sectionTitle: { ...type.title2, color: colors.label, marginTop: 8, paddingHorizontal: 4 },
+  sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label, marginTop: 8, paddingHorizontal: 4 },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator },
   empty: { ...type.subhead, color: colors.labelTertiary },
   missing: { ...type.subhead, color: colors.labelSecondary, textAlign: 'center', marginTop: 60, paddingHorizontal: 30, lineHeight: 22 },

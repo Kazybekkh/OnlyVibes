@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   headText: { flex: 1 },
-  name: { ...type.title3, color: colors.label },
+  name: { ...type.title3, fontWeight: '600', color: colors.label },
   sub: { ...type.caption1, color: colors.labelSecondary, marginTop: 2 },
   countPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
   count: { ...type.caption2 },

@@ -1,8 +1,8 @@
 // Headline card under the large title: team summary + connection status pill.
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, type } from '../lib/theme';
+import { useAgo } from '../lib/useAgo';
 import type { ConnStatus } from '../lib/useOnlyVibes';
 import { Glass } from './Glass';
 
@@ -23,18 +23,7 @@ export function TeamHeader({
   status: ConnStatus;
   lastSeen: number | null;
 }) {
-  const [ago, setAgo] = useState('');
-  useEffect(() => {
-    const f = () => {
-      if (!lastSeen) return setAgo('');
-      const s = Math.max(0, Math.round((Date.now() - lastSeen) / 1000));
-      setAgo(s < 2 ? 'just now' : `${s}s ago`);
-    };
-    f();
-    const t = setInterval(f, 1000);
-    return () => clearInterval(t);
-  }, [lastSeen]);
-
+  const ago = useAgo(lastSeen);
   const st = STATUS[status];
   return (
     <Glass style={styles.card} material="regular">

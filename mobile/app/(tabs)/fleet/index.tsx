@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
   sectionHead: {
     flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 10, marginBottom: -4, paddingHorizontal: 4,
   },
-  sectionTitle: { ...type.title2, color: colors.label },
+  sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label },
   sectionCount: { ...type.subhead, color: colors.labelSecondary },
   alertBanner: {
     backgroundColor: 'rgba(255,69,58,0.14)',

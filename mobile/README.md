@@ -68,10 +68,28 @@ headline summarizes the fleet, and when two agents edit the same file the
 Alerts tab lights up red. On iOS 26+ the tab bar floats as a glass pill and
 the large title collapses into the blurred nav bar on scroll.
 
+## Apple design resources used
+
+- **SF Symbols** (via `expo-symbols`): on iOS these render the real system
+  symbols — no bundling needed, licensed for Apple-platform apps.
+- **SF Pro**: the system font — all `fontSize`/`fontWeight` styles render SF Pro
+  automatically on device; `lib/theme.ts` encodes the HIG type scale (34/41
+  large title … 11/13 caption2) and dark-mode system colors (`#0A84FF` accent,
+  `#EBEBF5` label ramp, `rgba(84,84,88,0.6)` separator).
+- **Materials**: chrome (tab bar pill, nav bars) uses Liquid Glass — native
+  headers get it automatically from the iOS 26+ SDK, the tab bar is an
+  expo-blur capsule; content cards use the standard *thin* material per HIG
+  (Liquid Glass is for the functional/chrome layer only).
+- **App icon**: full-bleed 1024×1024 PNG (`assets/icon.png`, system applies the
+  squircle mask — never bake it in), generated in the iOS 27 Liquid Glass
+  spirit (dark glass gradient + glows + laptop/sparkle glyph); splash, Android
+  adaptive-icon layers and favicon regenerated to match.
+
 ## Notes / limits
 
-- expo-blur approximates `UIVisualEffectView`; on iOS 26 devices the native
-  headers/tab bar still use real materials via `headerBlurEffect`.
-- Native minimize-on-scroll tab pill (`tabBarMinimizeBehavior`) isn't exposed
-  by the installed React Navigation version, so the pill is static.
+- expo-blur approximates `UIVisualEffectView` for custom surfaces; native
+  headers get real materials via the iOS 26+ SDK (`headerBlurEffect`).
+- The tab-bar pill is a static capsule (React Navigation doesn't expose
+  `tabBarMinimizeBehavior` minimize-on-scroll; height/safe-area are left to
+  the navigator so the home-indicator inset is correct).
 - Server URL isn't persisted across app restarts yet (in-memory store).

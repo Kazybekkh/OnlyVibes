@@ -19,7 +19,7 @@ export const colors = {
   yellow: '#ffd60a',
   orange: '#ff9f0a',
   red: '#ff453a',
-  gray: '#98989f',
+  gray: '#8e8e93', // systemGray, dark mode
 
   // glass
   glassBorder: 'rgba(255,255,255,0.10)',
@@ -48,19 +48,20 @@ export const radius = {
   iconTile: 12,
 } as const;
 
-// SF Pro text style scale (points)
+// SF Pro text style scale — sizes/leading per HIG typography spec (iOS Large).
+// Large Title renders Bold inside nav bars; weights below are the regular variants.
 export const type = {
-  largeTitle: { fontSize: 34, fontWeight: '700' as const, letterSpacing: 0.36 },
-  title1: { fontSize: 28, fontWeight: '700' as const, letterSpacing: 0.34 },
-  title2: { fontSize: 22, fontWeight: '700' as const, letterSpacing: 0.35 },
-  title3: { fontSize: 20, fontWeight: '600' as const, letterSpacing: 0.38 },
-  headline: { fontSize: 17, fontWeight: '600' as const, letterSpacing: -0.41 },
-  body: { fontSize: 17, fontWeight: '400' as const, letterSpacing: -0.41 },
-  callout: { fontSize: 16, fontWeight: '400' as const, letterSpacing: -0.32 },
-  subhead: { fontSize: 15, fontWeight: '400' as const, letterSpacing: -0.24 },
-  footnote: { fontSize: 13, fontWeight: '400' as const, letterSpacing: -0.08 },
-  caption1: { fontSize: 12, fontWeight: '400' as const, letterSpacing: 0 },
-  caption2: { fontSize: 11, fontWeight: '600' as const, letterSpacing: 0.07 },
+  largeTitle: { fontSize: 34, lineHeight: 41, fontWeight: '400' as const, letterSpacing: 0.36 },
+  title1: { fontSize: 28, lineHeight: 34, fontWeight: '400' as const, letterSpacing: 0.34 },
+  title2: { fontSize: 22, lineHeight: 28, fontWeight: '400' as const, letterSpacing: 0.35 },
+  title3: { fontSize: 20, lineHeight: 25, fontWeight: '400' as const, letterSpacing: 0.38 },
+  headline: { fontSize: 17, lineHeight: 22, fontWeight: '600' as const, letterSpacing: -0.41 },
+  body: { fontSize: 17, lineHeight: 22, fontWeight: '400' as const, letterSpacing: -0.41 },
+  callout: { fontSize: 16, lineHeight: 21, fontWeight: '400' as const, letterSpacing: -0.32 },
+  subhead: { fontSize: 15, lineHeight: 20, fontWeight: '400' as const, letterSpacing: -0.24 },
+  footnote: { fontSize: 13, lineHeight: 18, fontWeight: '400' as const, letterSpacing: -0.08 },
+  caption1: { fontSize: 12, lineHeight: 16, fontWeight: '400' as const, letterSpacing: 0 },
+  caption2: { fontSize: 11, lineHeight: 13, fontWeight: '400' as const, letterSpacing: 0.07 },
 } as const;
 
 // Per-laptop accent palette — same cycle as web/index.html LAPTOP_COLORS

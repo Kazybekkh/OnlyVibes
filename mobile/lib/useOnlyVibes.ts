@@ -16,13 +16,12 @@ export interface LiveState {
 
 export function useOnlyVibes(url: string, demo: boolean, nonce: number): LiveState {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [status, setStatus] = useState<ConnStatus>(demo ? 'demo' : 'connecting');
+  const [status, setStatus] = useState<ConnStatus>('connecting');
   const [lastSeen, setLastSeen] = useState<number | null>(null);
   const demoTick = useRef(0);
 
   useEffect(() => {
     if (demo) {
-      setStatus('demo');
       const push = () => {
         demoTick.current += 1;
         setSnapshot(demoSnapshot(demoTick.current));
@@ -34,10 +33,7 @@ export function useOnlyVibes(url: string, demo: boolean, nonce: number): LiveSta
     }
 
     const norm = normalizeUrl(url);
-    if (!norm) {
-      setStatus('offline');
-      return;
-    }
+    if (!norm) return; // invalid URL -> derived 'offline' status below
 
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -106,5 +102,6 @@ export function useOnlyVibes(url: string, demo: boolean, nonce: number): LiveSta
     };
   }, [url, demo, nonce]);
 
-  return { snapshot, status, lastSeen };
+  const derived: ConnStatus = !normalizeUrl(url) ? 'offline' : demo ? 'demo' : status;
+  return { snapshot, status: derived, lastSeen };
 }

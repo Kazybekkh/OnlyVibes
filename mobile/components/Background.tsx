@@ -3,7 +3,6 @@
 // Liquid Glass instead of flat gray).
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
-import { colors } from '../lib/theme';
 
 export function Background() {
   return (

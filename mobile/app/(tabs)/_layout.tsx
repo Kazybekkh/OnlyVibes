@@ -19,14 +19,14 @@ export default function TabsLayout() {
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.gray,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-        // iOS 26 floating Liquid Glass pill: capsule floating above the home
-        // indicator with side margins; content scrolls underneath the blur.
+        // iOS 26/27 floating Liquid Glass pill: capsule with side margins,
+        // content scrolls underneath the blur. Height/paddingBottom are left to
+        // React Navigation so the home-indicator safe-area inset is included.
         tabBarStyle: {
           position: 'absolute',
           left: 12,
           right: 12,
           bottom: 8,
-          height: 62,
           backgroundColor: 'transparent',
           borderRadius: 999,
           borderWidth: StyleSheet.hairlineWidth,
@@ -34,7 +34,7 @@ export default function TabsLayout() {
           overflow: 'hidden',
           elevation: 0,
         },
-        tabBarItemStyle: { paddingTop: 8 },
+        tabBarItemStyle: { paddingTop: 8, height: 49 },
         tabBarBackground: () => (
           <>
             <BlurView intensity={glass.regular.intensity} tint="dark" style={StyleSheet.absoluteFill} />

@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
   alertText: { ...type.headline, color: colors.label, lineHeight: 22 },
   alertFile: { ...type.caption1, color: colors.labelTertiary, fontFamily: 'Menlo' },
   sectionHead: { marginTop: 10, marginBottom: -4, paddingHorizontal: 4 },
-  sectionTitle: { ...type.title2, color: colors.label },
+  sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label },
   voiceState: { ...type.caption2, color: colors.accent, textTransform: 'uppercase', letterSpacing: 0.6 },
   voiceLine: { ...type.subhead, color: colors.label },
 });
