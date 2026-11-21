@@ -48,6 +48,13 @@
   #voicebar #voiceTalk { padding: 14px 22px; font-size: 15px; }
   #voicebar button.holding { background: #7dd3fc; color: #08222f; }
   #voicebar .hint { font-size: 11px; opacity: .6; }
+  /* WebXR dom-overlay (phone AR): only shown while presenting */
+  #xroverlay { display: none; }
+  body.xr #xroverlay { display: block; }
+  #xroverlay:xr-overlay { display: block; }  /* separate rule: unknown pseudo-classes drop the whole rule */
+  #xroverlay #recenterBtn { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 40;
+    padding: 12px 22px; border-radius: 999px; border: 0; background: rgba(125,211,252,.95); color: #08222f;
+    font: 700 16px/1 ui-sans-serif, system-ui, sans-serif; }
 </style>
 <script type="importmap">
 {
@@ -66,6 +73,7 @@
   <p>live AI agents on every laptop · <span id="count">0</span> laptops · AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
 </div>
 <div id="status">connecting…</div>
+<div id="xroverlay"><button id="recenterBtn" type="button">⟲ Recenter</button></div>
 <div id="voicebar">
   <button id="voiceEnable" type="button">🎙 Enable voice</button>
   <button id="voiceTalk" type="button" style="display:none">Hold to talk</button>
@@ -173,17 +181,19 @@ function makeCard(opts = {}) {
 }
 
 // logoKey (optional): draw that agent's logo in a square column left of the text
+const CARD_RES = 1.8;  // canvas pixels per design pixel: 560 -> ~1000px wide textures, crisp in the headset
 function setCardText(sprite, text, logoKey = null) {
-  const { canvas, ctx, bg, fg, fontPx, scaleMul } = sprite.userData;
+  const { canvas, ctx, bg, fg, scaleMul } = sprite.userData;
+  const R = CARD_RES, fontPx = sprite.userData.fontPx * R;  // draw at ~1000px wide, same world size
   const L = logoKey ? getLogo(logoKey) : null;
   // skip identical redraws (state frames arrive 2x/s) so textures never churn
   const sig = `${text}|${logoKey}|${L && L.ready}|${sprite.userData.border || ''}`;
   if (sprite.userData.drawn === sig && sprite.userData.tex) return;
   sprite.userData.text = text; sprite.userData.logo = logoKey; sprite.userData.drawn = sig;
-  const maxW = 560, pad = 14, lineH = fontPx + 7;
-  const logoPx = L ? lineH * 2 - 6 : 0, gap = L ? 14 : 0;
+  const maxW = 560 * R, pad = 14 * R, lineH = fontPx + 7 * R;
+  const logoPx = L ? lineH * 2 - 6 * R : 0, gap = L ? 14 * R : 0;
   const textW = maxW - logoPx - gap;
-  ctx.font = `${fontPx}px 'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif`;
+  ctx.font = `600 ${fontPx}px 'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif`;
   // wrap (honoring explicit newlines), keep at most 4 lines
   const lines = [];
   for (const para of String(text).split('\n')) {
@@ -200,26 +210,27 @@ function setCardText(sprite, text, logoKey = null) {
   canvas.width = maxW + pad * 2;
   canvas.height = Math.max(Math.max(1, shown.length) * lineH, logoPx) + pad * 2;
   ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 14);
+  roundRect(ctx, 0, 0, canvas.width, canvas.height, 14 * R);
   ctx.fill();
   if (sprite.userData.border) { // agent-coloured outline (Claude coral, Codex green, Mistral amber)
-    ctx.lineWidth = 4; ctx.strokeStyle = sprite.userData.border;
-    roundRect(ctx, 2, 2, canvas.width - 4, canvas.height - 4, 13); ctx.stroke();
+    ctx.lineWidth = 4 * R; ctx.strokeStyle = sprite.userData.border;
+    roundRect(ctx, 2 * R, 2 * R, canvas.width - 4 * R, canvas.height - 4 * R, 13 * R); ctx.stroke();
   }
   if (L) {
-    if (L.ready) ctx.drawImage(L.img, pad, pad + 2, logoPx, logoPx);
+    if (L.ready) ctx.drawImage(L.img, pad, pad + 2 * R, logoPx, logoPx);
     else L.waiting.add(sprite);
   }
-  ctx.font = `${fontPx}px 'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif`;
+  ctx.font = `600 ${fontPx}px 'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif`;
   ctx.fillStyle = fg;
-  shown.forEach((ln, i) => ctx.fillText(ln, pad + logoPx + gap, pad + fontPx + i * lineH - 5));
+  shown.forEach((ln, i) => ctx.fillText(ln, pad + logoPx + gap, pad + fontPx + i * lineH - 5 * R));
   if (!sprite.userData.tex) {
     sprite.userData.tex = new THREE.CanvasTexture(canvas);
     sprite.material.map = sprite.userData.tex;
     sprite.material.needsUpdate = true;
   }
   sprite.userData.tex.needsUpdate = true;
-  const s = 0.0032 * scaleMul; // world units per pixel
+  if (sprite.userData.tex) sprite.userData.tex.anisotropy = 4;
+  const s = 0.0032 * scaleMul / R; // world units per pixel (card ~1.9 units wide whatever the resolution)
   sprite.scale.set(canvas.width * s, canvas.height * s, 1);
 }
 
@@ -423,16 +434,43 @@ function buildLaptop(status, idx) {
 
 // simple layout: laptop columns on an arc around the viewer (world origin), sorted by owner so one
 // person's laptops sit side by side; each column faces the viewer
-const ARC_RADIUS = 4, COLUMN_GAP = 2.5;  // gap > card width (~2.3), so columns never overlap
+// World origin = the viewer (eye height), -z = forward. Desktop: one wide arc. AR: the world is scaled so
+// a card is ~0.6 m wide and the arc sits ~1.2 m away; at most AR_PER_ROW columns per row (~90 deg),
+// extra laptops wrap to a row below instead of shrinking.
+const AR_SCALE = 0.32;                // 1 world unit = 0.32 m in AR (cards ~1.9 units -> ~0.6 m)
+const AR_DISTANCE_M = 1.2;
+const LAYOUT = {
+  desk: { radius: 4, gap: 2.5, perRow: 99 },
+  ar: { radius: AR_DISTANCE_M / AR_SCALE, gap: 0.7 / AR_SCALE, perRow: 3 },
+};
+// ?xrpreview=1: desktop preview of exactly what the headset sees at session start (camera = your eyes, 90 deg FOV)
+const XR_PREVIEW = new URLSearchParams(location.search).has('xrpreview');
+const IN_AR = () => renderer.xr.isPresenting || XR_PREVIEW;
+function columnExtent(g) {  // [bottom, top] of a laptop column in its own units
+  let top = 0.5;
+  for (const c of g.userData.cards.values()) top = Math.max(top, c.position.y + c.scale.y / 2);
+  return [-0.45, top];  // owner label hangs below the model
+}
 function relayout() {
+  const L = IN_AR() ? LAYOUT.ar : LAYOUT.desk;
   const gs = [...laptopGroups.values()].sort((x, y) =>
     String(x.userData.owner || '').localeCompare(String(y.userData.owner || '')) || String(x.userData.key).localeCompare(String(y.userData.key)));
-  const step = COLUMN_GAP / ARC_RADIUS, n = gs.length;
-  gs.forEach((g, i) => {
-    const ang = (i - (n - 1) / 2) * step;
-    g.position.set(Math.sin(ang) * ARC_RADIUS, 0, -Math.cos(ang) * ARC_RADIUS);
-    g.rotation.set(0, -ang, 0);
-  });
+  const step = L.gap / L.radius;
+  // AR: the first row's cards start a little above eye level and hang down; later rows go below
+  let rowTop = IN_AR() ? 0.25 / AR_SCALE : 0;
+  for (let r = 0; r * L.perRow < gs.length; r++) {
+    const row = gs.slice(r * L.perRow, (r + 1) * L.perRow), n = row.length;
+    let rowH = 0;
+    row.forEach((g, i) => {
+      const ang = (i - (n - 1) / 2) * step;
+      const [bot, top] = columnExtent(g);
+      rowH = Math.max(rowH, top - bot);
+      const y = IN_AR() ? rowTop - top : 0;  // align card tops in AR
+      g.position.set(Math.sin(ang) * L.radius, y, -Math.cos(ang) * L.radius);
+      g.rotation.set(0, -ang, 0);
+    });
+    rowTop -= rowH + 0.35;
+  }
 }
 
 function applyState(snap) {
@@ -468,8 +506,8 @@ function applyState(snap) {
       let card = cards.get(ak);
       if (!card) {
         card = sub
-          ? makeCard({ fontPx: 19, bg: 'rgba(22,24,27,0.92)', fg: '#d6d7d6', scaleMul: 0.8 })
-          : makeCard({ fontPx: 21, bg: 'rgba(16,17,18,0.92)', fg: '#eeeeed' });
+          ? makeCard({ fontPx: 23, bg: 'rgba(22,24,27,0.97)', fg: '#f0f0ef', scaleMul: 0.85 })
+          : makeCard({ fontPx: 27, bg: 'rgba(12,13,14,0.97)', fg: '#ffffff' });
         g.add(card);
         cards.set(ak, card);
       }
@@ -485,6 +523,7 @@ function applyState(snap) {
       y += h + 0.04;
       Object.assign(card.userData, { isCard: true, agent: a, ak, laptopKey: key, group: g });
     });
+    if (IN_AR()) { const top = columnExtent(g)[1]; if (Math.abs(top - (g.userData.lastTop || 0)) > 0.05) { g.userData.lastTop = top; relayoutSoon = true; } }
     for (const [ak, card] of [...cards.entries()]) {
       if (!names.has(ak)) {
         if (selected && selected.card === card) closePanel(`${ak} ended`);
@@ -495,8 +534,10 @@ function applyState(snap) {
   for (const [key, g] of [...laptopGroups.entries()]) {
     if (!seen.has(key) && performance.now() - (g.userData.lastSeen || 0) > 15000) { if (g.parent) g.parent.remove(g); laptopGroups.delete(key); relayout(); }
   }
+  if (relayoutSoon) { relayoutSoon = false; relayout(); }
   document.getElementById('count').textContent = (snap.laptops || []).length;
 }
+let relayoutSoon = false;
 
 // ---------------------------------------------------------------- live data (WS /view), no fake data
 const statusEl = document.getElementById('status');
@@ -521,17 +562,24 @@ connect();
 
 
 // ---------------------------------------------------------------- WebXR "Enter AR"
-const arButton = ARButton.createButton(renderer, { optionalFeatures: ['hit-test', 'local-floor'] });
+// 'local' (set above): origin = head at session start, so there is no floor offset; we anchor on the
+// live head pose anyway, so 'local-floor' devices would work the same
+const xrOverlay = document.getElementById('xroverlay');
+const arButton = ARButton.createButton(renderer, { optionalFeatures: ['dom-overlay'], domOverlay: { root: xrOverlay } });
+document.getElementById('recenterBtn').addEventListener('click', (e) => { e.stopPropagation(); recenter(); });
 arButton.textContent = '📱 Enter AR';
 document.body.appendChild(arButton);
 // in AR ('local' space: origin at the viewer, -z is forward): scale the world down so the arc sits
 // ~0.5 m in front of you, cards around eye level
-const AR_SCALE = 0.13;
 renderer.xr.addEventListener('sessionstart', () => {
+  document.body.classList.add('xr');
   world.scale.setScalar(AR_SCALE);
-  world.position.set(0, -0.3, 0);
+  world.position.set(0, 0, 0);
   grid.visible = false;
-  setTimeout(summonWorld, 300); // once the headset pose is known, centre the arc on you
+  relayout();
+  // the first poses can be identity / not yet tracked: re-anchor on several early frames
+  recenterFrames = [2, 10, 30, 60, 120];
+  xrFrame = 0;
   const xs = renderer.xr.getSession();
   if (PTT === 'trigger' && xs) {  // opt-in: trigger = talk (select the card on desktop first)
     xs.addEventListener('selectstart', () => pttDown());
@@ -542,16 +590,20 @@ renderer.xr.addEventListener('sessionstart', () => {
   setTimeout(() => setVoiceText('Trigger a card to select it' + (voiceOn ? '\nhold B/Y and speak to give it a new prompt' : ''), 'ready', 6000), 600);
 });
 renderer.xr.addEventListener('sessionend', () => {
+  if (world.userData.grabbedBy) { scene.attach(world); world.userData.grabbedBy = null; }
+  document.body.classList.remove('xr');
   world.scale.setScalar(1);
   world.position.set(0, 0, 0);
   world.rotation.set(0, 0, 0);
   grid.visible = true;
+  recenterFrames = [];
+  setTimeout(relayout, 0);
   if (voiceCard.visible) setVoiceText(lastVoiceText);  // rescale for desktop
 });
 
 // ---------------------------------------------------------------- controllers (ZapBox etc.)
 // trigger (hold) = grab the whole scene and move it with your hand
-// grip/squeeze   = summon the scene to 0.5m in front of your face
+// grip/squeeze   = recenter: arc ~1.2 m in front of you at eye height (also the Recenter button)
 // thumbstick     = up/down scales, left/right rotates
 // B/Y (hold)     = push-to-talk voice prompt to the selected card
 const controllers = [];
@@ -571,19 +623,39 @@ for (let i = 0; i < 2; i++) {
     if (!world.userData.grabbedBy) { c.attach(world); world.userData.grabbedBy = c; }
   });
   c.addEventListener('selectend', () => { if (world.userData.grabbedBy === c) { scene.attach(world); world.userData.grabbedBy = null; } });
-  c.addEventListener('squeezestart', () => summonWorld());
+  c.addEventListener('squeezestart', () => recenter());
   scene.add(c);
   controllers.push(c);
 }
 const _fwd = new THREE.Vector3(), _camPos = new THREE.Vector3();
-function summonWorld() {
+// anchor the world (origin = viewer) on the head: position incl. eye height, forward yaw only
+let recenterFrames = [], xrFrame = 0, outOfViewSince = 0;
+const _q = new THREE.Quaternion(), _e = new THREE.Euler();
+function recenter() {
+  if (!renderer.xr.isPresenting) return;
   if (world.userData.grabbedBy) { scene.attach(world); world.userData.grabbedBy = null; }
   const xrCam = renderer.xr.getCamera();
+  xrCam.updateMatrixWorld(true);
   xrCam.getWorldPosition(_camPos);
-  xrCam.getWorldDirection(_fwd); _fwd.y = 0; _fwd.normalize();
-  world.position.copy(_camPos);   // arc is centred on you
-  world.position.y = _camPos.y - 0.3;
-  world.rotation.set(0, Math.atan2(-_fwd.x, -_fwd.z), 0);
+  xrCam.getWorldDirection(_fwd);  // -z of the head
+  _fwd.y = 0;
+  let yaw = world.rotation.y;
+  if (_fwd.lengthSq() > 1e-4) { _fwd.normalize(); yaw = Math.atan2(-_fwd.x, -_fwd.z); }  // ignore pitch/roll
+  world.position.copy(_camPos);
+  world.rotation.set(0, yaw, 0);
+  world.scale.setScalar(AR_SCALE);
+  outOfViewSince = 0;
+}
+// auto-recenter when the whole arc has been behind / beside you for more than 3 s
+const _toArc = new THREE.Vector3(), _arcC = new THREE.Vector3();
+function watchOutOfView(cam, now) {
+  if (world.userData.grabbedBy) { outOfViewSince = 0; return; }
+  cam.getWorldPosition(_camPos); cam.getWorldDirection(_fwd);
+  _arcC.set(0, 0, -LAYOUT.ar.radius); world.localToWorld(_arcC);
+  _toArc.subVectors(_arcC, _camPos).normalize();
+  if (_toArc.dot(_fwd) > Math.cos(THREE.MathUtils.degToRad(80))) { outOfViewSince = 0; return; }
+  if (!outOfViewSince) outOfViewSince = now;
+  else if (now - outOfViewSince > 3000) recenter();
 }
 function pollSticks(dt) {
   for (const c of controllers) {
@@ -592,7 +664,7 @@ function pollSticks(dt) {
     const x = gp.axes[2] ?? gp.axes[0] ?? 0, y = gp.axes[3] ?? gp.axes[1] ?? 0;
     if (Math.abs(y) > 0.5) world.scale.multiplyScalar(1 - y * dt * 1.2); // push up = bigger
     if (Math.abs(x) > 0.5) world.rotation.y -= x * dt * 1.5;
-    const sc = THREE.MathUtils.clamp(world.scale.x, 0.03, 2);
+    const sc = THREE.MathUtils.clamp(world.scale.x, 0.08, 2);
     world.scale.setScalar(sc);
   }
 }
@@ -691,7 +763,7 @@ function setVoiceText(t, state = 'ready', holdMs = 8000) {
   voiceCard.userData.bg = VOICE_BG[state] || VOICE_BG.ready;
   voiceCard.userData.drawn = '';  // bg may have changed: force a redraw
   setCardText(voiceCard, t);
-  if (renderer.xr.isPresenting) voiceCard.scale.multiplyScalar(0.25);
+  if (renderer.xr.isPresenting) voiceCard.scale.multiplyScalar(0.2);  // ~0.38 m wide at 0.9 m
   voiceCard.visible = true;
   if (voiceHideTimer) clearTimeout(voiceHideTimer);
   voiceHideTimer = setTimeout(() => { voiceCard.visible = false; }, holdMs);
@@ -725,9 +797,9 @@ const _vP = new THREE.Vector3(), _vF = new THREE.Vector3(), _vQ = new THREE.Quat
 function updateVoiceCard(cam) {
   if (!voiceCard.visible) return;
   cam.getWorldPosition(_vP); cam.getWorldQuaternion(_vQ);
-  // a bit above eye line, so it doesn't cover the cards
-  _vF.set(0, 0.22, -1).normalize().applyQuaternion(_vQ);
-  voiceCard.position.copy(_vP).addScaledVector(_vF, renderer.xr.isPresenting ? 0.7 : 2.2);
+  // above the cards (their tops sit ~12 deg above eye line at 1.2 m), so it never covers them
+  _vF.set(0, renderer.xr.isPresenting ? 0.45 : 0.22, -1).normalize().applyQuaternion(_vQ);
+  voiceCard.position.copy(_vP).addScaledVector(_vF, renderer.xr.isPresenting ? 0.9 : 2.2);
 }
 
 // ---------------------------------------------------------------- select a card -> control panel
@@ -922,7 +994,12 @@ const _camQ = new THREE.Quaternion(), _parentQ = new THREE.Quaternion();
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   const t = clock.elapsedTime;
-  if (renderer.xr.isPresenting) { pollSticks(dt); updateRays(); pollVoiceButtons(); } else orbit.update();
+  if (renderer.xr.isPresenting) {
+    xrFrame++;
+    if (recenterFrames.length && xrFrame >= recenterFrames[0]) { recenterFrames.shift(); recenter(); }
+    pollSticks(dt); updateRays(); pollVoiceButtons();
+    if (!recenterFrames.length) watchOutOfView(renderer.xr.getCamera(), performance.now());
+  } else orbit.update();
   // active camera: XR headset camera while presenting, desktop camera otherwise
   const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   cam.getWorldQuaternion(_camQ);
@@ -942,6 +1019,11 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 
+if (XR_PREVIEW) {
+  world.scale.setScalar(AR_SCALE); grid.visible = false; orbit.enabled = false;
+  camera.fov = 90; camera.position.set(0, 0, 0); camera.lookAt(0, 0, -1); camera.updateProjectionMatrix();
+  orbit.update = () => {};
+}
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
