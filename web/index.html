@@ -1,303 +1,92 @@
 <!DOCTYPE html>
+<!--
+  OnlyVibes: live orchestration board (main UI).
+
+  Served by the hub at "/" (server serves web/ statically), e.g.
+    cd server && uv run uvicorn main:app --host 0.0.0.0 --port 8000   ->  http://<hub>:8000/
+  Talks only to the PROTOCOL.md §4 surface: GET /api/state, WS /board, GET /api/tasks/{id},
+  POST /api/projects, /api/messages, /api/projects/{id}/tasks, /api/tasks/{id}/{retry,cancel,done}.
+
+  Standalone: open this file directly (file://) or serve web/ with no hub behind it; after 2.5 s
+  without an answer the board runs an in-page simulation labelled "Demo data" (web/demo.js).
+  URL options: ?demo=1 forces the demo (&speed=N fast-forwards it), ?hub=host:port points the board at another hub
+  (that hub must allow CORS). Deep link a task with #task=<task id>.
+
+  The 3D / WebXR table lives in ar.html.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>OnlyVibes — live agent table</title>
-<style>
-  html, body {
-    margin: 0; height: 100%; overflow: hidden; background: #0b0e14; color: #e8ecf3;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  #app { position: fixed; inset: 0; }
-  #hud { position: fixed; top: 12px; left: 14px; z-index: 10; pointer-events: none; }
-  #hud h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .5px; }
-  #hud p  { font-size: 12px; margin: 0; opacity: .7; }
-  #status { position: fixed; top: 12px; right: 14px; z-index: 10; font-size: 12px; opacity: .85; text-align: right; }
-  /* ARButton injects its own button; pin it to the bottom center */
-  #app button, body > button {
-    position: fixed !important; bottom: 24px !important; left: 50% !important;
-    transform: translateX(-50%) !important; z-index: 20 !important;
-    padding: 12px 22px !important; border-radius: 999px !important; border: 0 !important;
-    background: #7dd3fc !important; color: #08222f !important;
-    font: 600 15px/1 ui-sans-serif, system-ui, sans-serif !important; cursor: pointer !important;
-  }
-</style>
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-  }
-}
-</script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>OnlyVibes · board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<link rel="stylesheet" href="board.css" />
 </head>
 <body>
-<div id="app"></div>
-<div id="hud">
-  <h1>OnlyVibes</h1>
-  <p>live AI agents on every laptop · <span id="count">0</span> laptops · AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
-</div>
-<div id="status">connecting…</div>
 
-<script type="module">
-import * as THREE from 'three';
-import { ARButton } from 'three/addons/webxr/ARButton.js';
+<header class="topbar">
+  <a class="brand" href="./" aria-label="OnlyVibes board">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>OnlyVibes
+  </a>
 
-// ---------------------------------------------------------------- renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.xr.enabled = true;
-renderer.xr.setReferenceSpaceType('local-floor');
-document.getElementById('app').appendChild(renderer.domElement);
+  <div class="switcher" id="switcher" hidden>
+    <button class="switcher-btn" id="project-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+      <span class="sdot" id="project-dot"></span>
+      <span class="switcher-title" id="project-title">No project</span>
+      <span class="switcher-meta mono" id="project-meta"></span>
+      <svg class="chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+    </button>
+    <ul class="menu" id="project-menu" role="listbox" aria-label="Projects" hidden></ul>
+  </div>
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0e14);
-scene.fog = new THREE.Fog(0x0b0e14, 9, 24);
+  <button class="btn" id="new-product" type="button">New product</button>
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
-camera.position.set(0, 2.4, 5.4);
-camera.lookAt(0, 0.7, 0);
+  <div class="spacer"></div>
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.4);
-keyLight.position.set(3, 6, 4);
-scene.add(keyLight);
-const rim = new THREE.PointLight(0x66aaff, 10, 25);
-rim.position.set(-4, 3, -3);
-scene.add(rim);
+  <span class="conn" id="conn" data-state="connecting" role="status" aria-live="polite">
+    <span class="conn-dot"></span><span class="conn-label" id="conn-label">Connecting</span>
+  </span>
+  <button class="btn ghost rail-toggle" id="rail-toggle" type="button" aria-controls="rail" aria-expanded="false">
+    Chatter <span class="badge-count mono" id="rail-unread" hidden></span>
+  </button>
+  <a class="toplink" href="ar.html">3D / AR</a>
+</header>
 
-// ---------------------------------------------------------------- the table
-const world = new THREE.Group();          // everything the AR session shows
-scene.add(world);
+<section class="fleet" id="fleet" aria-label="Worker fleet">
+  <span class="fleet-label">Fleet</span>
+  <div class="fleet-chips" id="fleet-chips"></div>
+</section>
 
-const grid = new THREE.GridHelper(24, 24, 0x22304a, 0x131a29);
-grid.position.y = 0.001;
-world.add(grid);
+<main class="main">
+  <section class="board" id="board" aria-label="Task board">
+    <div class="project-bar" id="project-bar" hidden></div>
+    <div class="planning" id="planning" hidden></div>
+    <div class="columns" id="columns" hidden></div>
+    <div class="empty" id="empty" hidden></div>
+  </section>
 
-const table = new THREE.Group();
-const top = new THREE.Mesh(
-  new THREE.CylinderGeometry(1.7, 1.7, 0.08, 48),
-  new THREE.MeshStandardMaterial({ color: 0x2a3140, roughness: 0.55, metalness: 0.25 })
-);
-top.position.y = 0.75;
-table.add(top);
-const leg = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.08, 0.12, 0.75, 16),
-  new THREE.MeshStandardMaterial({ color: 0x1a1f2b, roughness: 0.8 })
-);
-leg.position.y = 0.375;
-table.add(leg);
-world.add(table);
+  <aside class="rail" id="rail" aria-label="Agent chatter">
+    <div class="rail-head">
+      <h2>Agent chatter</h2>
+      <span class="mono dim" id="rail-count"></span>
+    </div>
+    <ol class="msgs" id="rail-msgs"></ol>
+    <form class="say" id="rail-form" autocomplete="off"></form>
+  </aside>
+</main>
 
-// ---------------------------------------------------------------- text cards
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
+<aside class="drawer" id="drawer" aria-labelledby="d-title" hidden></aside>
 
-function makeCard(opts = {}) {
-  const { bg = 'rgba(15,20,30,0.88)', fg = '#dfe6f3', fontPx = 24 } = opts;
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false }));
-  sprite.userData = { canvas, ctx, bg, fg, fontPx, tex: null };
-  setCardText(sprite, '');
-  return sprite;
-}
+<dialog class="dialog" id="composer-dialog" aria-label="New product"></dialog>
+<dialog class="dialog" id="addtask-dialog" aria-label="Add task"></dialog>
 
-function setCardText(sprite, text) {
-  const { canvas, ctx, bg, fg, fontPx } = sprite.userData;
-  const maxW = 560, pad = 14, lineH = fontPx + 7;
-  ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
-  // wrap (honoring explicit newlines), keep at most 4 lines
-  const lines = [];
-  for (const para of String(text).split('\n')) {
-    let cur = '';
-    for (const w of para.split(/\s+/).filter(Boolean)) {
-      const t = cur ? cur + ' ' + w : w;
-      if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; }
-      else cur = t;
-    }
-    if (cur) lines.push(cur);
-  }
-  const shown = lines.slice(0, 4);
-  if (lines.length > 4) shown[3] = shown[3].slice(0, -1) + '…';
-  canvas.width = maxW + pad * 2;
-  canvas.height = Math.max(1, shown.length) * lineH + pad * 2;
-  ctx.fillStyle = bg;
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 14);
-  ctx.fill();
-  ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
-  ctx.fillStyle = fg;
-  shown.forEach((ln, i) => ctx.fillText(ln, pad, pad + fontPx + i * lineH - 5));
-  if (!sprite.userData.tex) {
-    sprite.userData.tex = new THREE.CanvasTexture(canvas);
-    sprite.material.map = sprite.userData.tex;
-    sprite.material.needsUpdate = true;
-  }
-  sprite.userData.tex.needsUpdate = true;
-  const s = 0.0032; // world units per pixel
-  sprite.scale.set(canvas.width * s, canvas.height * s, 1);
-}
+<div class="toasts" id="toasts" aria-live="polite"></div>
 
-// ---------------------------------------------------------------- laptops
-const LAPTOP_COLORS = [0x7dd3fc, 0xf0abfc, 0x86efac, 0xfcd34d, 0xfca5a5, 0xc4b5fd];
-const laptopGroups = new Map(); // key (tailscale_ip) -> THREE.Group
-
-function buildLaptop(status, idx) {
-  const g = new THREE.Group();
-  const accent = new THREE.Color(LAPTOP_COLORS[idx % LAPTOP_COLORS.length]);
-
-  const base = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.035, 0.42),
-    new THREE.MeshStandardMaterial({ color: 0x39415a, roughness: 0.5, metalness: 0.3 })
-  );
-  base.position.y = 0.018;
-  g.add(base);
-
-  const screen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.4, 0.025),
-    new THREE.MeshStandardMaterial({ color: 0x0d1117, emissive: accent, emissiveIntensity: 0.6, roughness: 0.3 })
-  );
-  screen.position.set(0, 0.21, -0.2);
-  screen.rotation.x = -0.35;
-  g.add(screen);
-
-  const label = makeCard({ fontPx: 24, bg: 'rgba(15,20,30,0.9)' });
-  label.position.y = 0.66;
-  g.add(label);
-  g.userData.label = label;
-  g.userData.cards = new Map(); // agentKey -> sprite
-  return g;
-}
-
-function layout() {
-  const entries = [...laptopGroups.entries()];
-  const n = Math.max(entries.length, 1);
-  entries.forEach(([_key, g], i) => {
-    const a = (i / n) * Math.PI * 2;
-    g.position.set(Math.cos(a) * 2.5, 0.78, Math.sin(a) * 2.5); // sit on the table top
-    g.lookAt(0, 0.78, 0);
-  });
-}
-
-function applyState(snap) {
-  const seen = new Set();
-  (snap.laptops || []).forEach((st) => {
-    const key = st.tailscale_ip || st.laptop;
-    seen.add(key);
-    let g = laptopGroups.get(key);
-    if (!g) {
-      g = buildLaptop(st, laptopGroups.size);
-      laptopGroups.set(key, g);
-      world.add(g);
-      layout();
-    }
-    setCardText(g.userData.label, `${st.laptop} · ${st.owner}\n${st.tailscale_ip}`);
-
-    const cards = g.userData.cards;
-    const names = new Set();
-    (st.agents || []).forEach((a, j) => {
-      const ak = `${a.name}:${a.pid}`;
-      names.add(ak);
-      let card = cards.get(ak);
-      if (!card) {
-        card = makeCard({ fontPx: 21, bg: 'rgba(8,26,20,0.9)', fg: '#d9f4e6' });
-        card.userData.baseY = 1.05 + (j % 3) * 0.36;
-        card.position.set(0, card.userData.baseY, 0);
-        g.add(card);
-        cards.set(ak, card);
-      }
-      const head = `${a.name} · pid ${a.pid} · ${a.cpu}% cpu`;
-      const detail = a.summary || a.last_log || '';
-      setCardText(card, `${head}\n${(detail || '').slice(0, 200)}`);
-    });
-    for (const [ak, card] of [...cards.entries()]) {
-      if (!names.has(ak)) { g.remove(card); cards.delete(ak); }
-    }
-  });
-  for (const [key, g] of [...laptopGroups.entries()]) {
-    if (!seen.has(key)) { world.remove(g); laptopGroups.delete(key); layout(); }
-  }
-  document.getElementById('count').textContent = (snap.laptops || []).length;
-}
-
-// ---------------------------------------------------------------- live data (WS /view) + fake fallback
-const statusEl = document.getElementById('status');
-let gotReal = false;
-
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  const ws = new WebSocket(proto + location.host + '/view');
-  ws.onopen = () => { statusEl.textContent = 'live'; };
-  ws.onmessage = (ev) => {
-    gotReal = true;
-    statusEl.textContent = 'live';
-    try { applyState(JSON.parse(ev.data)); } catch { /* ignore bad frame */ }
-  };
-  ws.onclose = () => { if (!gotReal) statusEl.textContent = 'no server — fake data'; setTimeout(connect, 2000); };
-  ws.onerror = () => { if (!gotReal) statusEl.textContent = 'no server — fake data'; };
-}
-connect();
-
-// standalone fallback: if no server answers within 2.5s, show fake laptops
-const FAKE = [
-  { laptop: 'kay-mbp', owner: 'kay', tailscale_ip: '100.64.0.11',
-    agents: [{ name: 'vibe', pid: 3001, cpu: 42.1, cwd: '', last_log: '⏺ Edit server/main.py', summary: 'editing the FastAPI server' },
-             { name: 'cursor', pid: 3018, cpu: 12.4, cwd: '', last_log: 'Agent: web/index.html', summary: 'tweaking the 3D view' }] },
-  { laptop: 'amina-air', owner: 'amina', tailscale_ip: '100.64.0.27',
-    agents: [{ name: 'claude-code', pid: 4102, cpu: 65.0, cwd: '', last_log: 'Read reporter/reporter.py', summary: 'reading the reporter code' },
-             { name: 'codex', pid: 4117, cpu: 30.7, cwd: '', last_log: 'patched 3 files', summary: 'patching three files' }] },
-  { laptop: 'dao-legion', owner: 'dao', tailscale_ip: '100.64.0.42',
-    agents: [{ name: 'codex', pid: 5201, cpu: 8.2, cwd: '', last_log: 'reasoning…', summary: 'thinking about WebXR' },
-             { name: 'vibe', pid: 5233, cpu: 51.9, cwd: '', last_log: '⏺ Ran pytest — 12 passed', summary: 'running the test suite' },
-             { name: 'claude-code', pid: 5250, cpu: 3.3, cwd: '', last_log: 'TodoWrite 3/5', summary: 'updating the todo list' }] },
-];
-setTimeout(() => {
-  if (gotReal) return;
-  let tick = 0;
-  setInterval(() => {
-    if (gotReal) return;
-    tick++;
-    applyState({ laptops: FAKE.map(l => ({ ...l, ts: Date.now() / 1000,
-      agents: l.agents.map(a => ({ ...a, cpu: Math.max(1, a.cpu + Math.sin(tick + a.pid) * 8) })) })) });
-  }, 1000);
-}, 2500);
-
-// ---------------------------------------------------------------- WebXR "Enter AR"
-const arButton = ARButton.createButton(renderer, { optionalFeatures: ['hit-test', 'local-floor'] });
-arButton.textContent = '📱 Enter AR';
-document.body.appendChild(arButton);
-// in AR, put the table ~1.5m in front of the user instead of at their feet
-renderer.xr.addEventListener('sessionstart', () => { world.position.set(0, 0, -1.5); });
-renderer.xr.addEventListener('sessionend', () => { world.position.set(0, 0, 0); });
-
-// ---------------------------------------------------------------- loop / resize
-const clock = new THREE.Clock();
-renderer.setAnimationLoop(() => {
-  const t = clock.getElapsedTime();
-  for (const g of laptopGroups.values()) {
-    let j = 0;
-    for (const card of g.userData.cards.values()) {
-      card.position.y = (card.userData.baseY ?? 1.05) + Math.sin(t * 2 + j) * 0.03;
-      j++;
-    }
-  }
-  renderer.render(scene, camera);
-});
-
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-</script>
+<script src="lib.js"></script>
+<script src="demo.js"></script>
+<script src="board.js"></script>
 </body>
 </html>

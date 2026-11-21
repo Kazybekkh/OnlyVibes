@@ -1,0 +1,14 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/work/ws","session_id":"c-1","model":"gpt-5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"the prompt"}]},"session_id":"c-1"}
+{"type":"thinking","subtype":"delta","text":"Let me look "}
+{"type":"thinking","subtype":"delta","text":"at the files."}
+{"type":"thinking","subtype":"completed"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll inspect the repo."}]},"session_id":"c-1"}
+{"type":"tool_call","subtype":"started","call_id":"call_1","tool_call":{"shellToolCall":{"args":{"command":"npm test"}}},"session_id":"c-1"}
+{"type":"tool_call","subtype":"completed","call_id":"call_1","tool_call":{"shellToolCall":{"args":{"command":"npm test"},"result":{"success":{"stdout":"3 passing","exitCode":0}}}},"session_id":"c-1"}
+{"type":"tool_call","subtype":"started","call_id":"call_2","tool_call":{"readToolCall":{"args":{"path":"/work/ws/README.md"}}},"session_id":"c-1"}
+{"type":"tool_call","subtype":"completed","call_id":"call_2","tool_call":{"readToolCall":{"args":{"path":"/work/ws/README.md"},"result":{"success":{"content":"# Title","totalLines":1}}}},"session_id":"c-1"}
+{"type":"tool_call","subtype":"started","call_id":"call_3","tool_call":{"editToolCall":{"args":{"path":"/work/ws/src/a.ts"}}},"session_id":"c-1"}
+{"type":"tool_call","subtype":"completed","call_id":"call_3","tool_call":{"editToolCall":{"args":{"path":"/work/ws/src/a.ts"},"result":{"error":{"message":"file is read-only"}}}},"session_id":"c-1"}
+{"type":"something_new","foo":1}
+{"type":"result","subtype":"success","duration_ms":3000,"is_error":false,"result":"Done: tests pass.","session_id":"c-1"}
