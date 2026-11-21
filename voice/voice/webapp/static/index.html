@@ -39,6 +39,7 @@ const TTS_MODEL = "voxtral-mini-tts-3-0";
 const TTS_RATE = 48000;   // realtime pcm is 48kHz mono int16
 const MIC_RATE = 16000;
 const WS_BASE = "wss://api.mistral.ai/v1";
+const MAX_TURN_MS = 30000;
 
 const pad = document.getElementById("pad");
 const transcriptEl = document.getElementById("transcript");
@@ -50,6 +51,7 @@ let micCtx = null, micStream = null, workletNode = null;
 let sttWs = null, ttsWs = null;
 let audioCtx = null, nextPlayTime = 0;
 let holding = false, turnActive = false, t0 = 0, firstAudio = 0;
+let endTimer = null, doneFallback = null;
 const history = [];
 
 const status = (s) => { statusEl.textContent = s; };
@@ -60,6 +62,22 @@ async function mintToken(model) {
   if (!r.ok) throw new Error("token mint failed: " + await r.text());
   return (await r.json()).token;
 }
+
+// ---------- websocket helper: dispatch + waiters ----------
+function attach(ws, onEvent) {
+  ws._waiters = [];
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    ws._waiters = ws._waiters.filter(w => !w(msg));
+    onEvent(msg);
+  };
+}
+function waitEvent(ws, type) {
+  return new Promise((res) => {
+    ws._waiters.push((msg) => { if (msg.type === type) { res(msg); return true; } return false; });
+  });
+}
+const send = (ws, obj) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); };
 
 // ---------- mic ----------
 async function startMic() {
@@ -84,82 +102,23 @@ async function startMic() {
   await micCtx.audioWorklet.addModule(workletUrl);
   workletNode = new AudioWorkletNode(micCtx, "pcm");
   workletNode.port.onmessage = (e) => {
-    if (holding && sttWs && sttWs.readyState === WebSocket.OPEN) {
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(e.data)));
-      sttWs.send(JSON.stringify({ type: "input_audio.append", audio: b64 }));
-    }
+    if (holding && turnActive) send(sttWs, { type: "input_audio.append",
+      audio: btoa(String.fromCharCode(...new Uint8Array(e.data))) });
   };
   src.connect(workletNode).connect(micCtx.destination);
 }
 
-// ---------- STT websocket ----------
-async function openStt() {
-  const token = await mintToken(STT_MODEL);
-  sttWs = new WebSocket(`${WS_BASE}/audio/transcriptions/realtime?model=${STT_MODEL}`,
-                        ["realtime", token]);
-  sttWs.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "transcription.text.delta") {
-      transcriptEl.textContent += msg.text;
-    } else if (msg.type === "transcription.done") {
-      const text = (msg.text || transcriptEl.textContent).trim();
-      sttWs.send(JSON.stringify({ type: "input_audio.end" }));
-      if (text) runReply(text);
-      else endTurn();
-    } else if (msg.type === "error") {
-      status("STT error: " + JSON.stringify(msg.error));
-      endTurn();
-    }
-  };
-  await new Promise((res, rej) => { sttWs.onopen = res; sttWs.onerror = rej; });
+// ---------- audio out: create/resume inside the user gesture ----------
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new AudioContext();
+  if (audioCtx.state === "suspended") audioCtx.resume();
 }
-
-// ---------- TTS websocket ----------
-async function openTts() {
-  const token = await mintToken(TTS_MODEL);
-  ttsWs = new WebSocket(`${WS_BASE}/audio/speech/realtime?model=${TTS_MODEL}`,
-                        ["realtime", token]);
-  ttsWs.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "speech.audio.delta") {
-      if (!firstAudio) { firstAudio = performance.now();
-        timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s`; }
-      playPcm(atob(msg.audio_data));
-    } else if (msg.type === "speech.audio.done") {
-      // wait for audio to drain, then reset for next turn
-      const drainMs = Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000);
-      setTimeout(endTurn, drainMs + 150);
-    } else if (msg.type === "error") {
-      status("TTS error: " + JSON.stringify(msg.error)); endTurn();
-    }
-  };
-  await new Promise((res, rej) => { ttsWs.onopen = res; ttsWs.onerror = rej; });
-  ttsWs.send(JSON.stringify({ type: "session.update", session: {
-    voice: "voice_592", response_format: "pcm", streaming_mode: "responsive" } }));
-  await new Promise((res) => { ttsWs.onmessage = (ev) => {   // wait for session.updated
-    const m = JSON.parse(ev.data); if (m.type === "session.updated") res(); } });
-  // restore the real handler
-  ttsWs.onmessage = ttsHandler;
-}
-function ttsHandler(ev) {
-  const msg = JSON.parse(ev.data);
-  if (msg.type === "speech.audio.delta") {
-    if (!firstAudio) { firstAudio = performance.now();
-      timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s`; }
-    playPcm(atob(msg.audio_data));
-  } else if (msg.type === "speech.audio.done") {
-    const drainMs = Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000);
-    setTimeout(endTurn, drainMs + 150);
-  } else if (msg.type === "error") { status("TTS error: " + JSON.stringify(msg.error)); endTurn(); }
-}
-
-// ---------- audio playback (48k pcm int16) ----------
 function playPcm(b64) {
+  ensureAudio();
   const bin = atob(b64);
   const samples = new Int16Array(bin.length / 2);
   for (let i = 0; i < samples.length; i++)
     samples[i] = (bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8)) << 16 >> 16;
-  if (!audioCtx) audioCtx = new AudioContext();
   const buf = audioCtx.createBuffer(1, samples.length, TTS_RATE);
   buf.copyToChannel(samples, 0);
   const src = audioCtx.createBufferSource();
@@ -170,10 +129,61 @@ function playPcm(b64) {
   nextPlayTime += buf.duration;
 }
 
-// ---------- chat (SSE via our server) ----------
+// ---------- STT: one fresh session per turn (it ends at transcription.done) ----------
+async function openStt() {
+  if (sttWs) { try { sttWs.close(); } catch {} sttWs = null; }
+  const token = await mintToken(STT_MODEL);
+  sttWs = new WebSocket(`${WS_BASE}/audio/transcriptions/realtime?model=${STT_MODEL}`,
+                        ["realtime", token]);
+  const opened = new Promise((res, rej) => { sttWs.onopen = res; sttWs.onerror = rej; });
+  attach(sttWs, (msg) => {
+    if (msg.type === "transcription.text.delta") {
+      transcriptEl.textContent += msg.text;
+    } else if (msg.type === "transcription.done") {
+      const text = (msg.text || transcriptEl.textContent).trim();
+      try { sttWs.close(); } catch {}
+      sttWs = null;
+      if (doneFallback) { clearTimeout(doneFallback); doneFallback = null; }
+      if (text) runReply(text); else endTurn();
+    } else if (msg.type === "error") {
+      status("STT error: " + JSON.stringify(msg.error)); endTurn();
+    }
+  });
+  await opened;
+  await waitEvent(sttWs, "session.created");
+}
+
+// ---------- TTS: one reusable session, several generations ----------
+async function openTts() {
+  if (ttsWs && ttsWs.readyState === WebSocket.OPEN) return;
+  const token = await mintToken(TTS_MODEL);
+  ttsWs = new WebSocket(`${WS_BASE}/audio/speech/realtime?model=${TTS_MODEL}`,
+                        ["realtime", token]);
+  const opened = new Promise((res, rej) => { ttsWs.onopen = res; ttsWs.onerror = rej; });
+  attach(ttsWs, (msg) => {
+    if (msg.type === "speech.audio.delta") {
+      if (!firstAudio) { firstAudio = performance.now();
+        timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s`; }
+      playPcm(msg.audio_data);
+    } else if (msg.type === "speech.audio.done") {
+      const drainMs = Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000);
+      setTimeout(endTurn, drainMs + 150);
+    } else if (msg.type === "error") {
+      status("TTS error: " + JSON.stringify(msg.error)); endTurn();
+    }
+  });
+  await opened;
+  await waitEvent(ttsWs, "session.created");
+  send(ttsWs, { type: "session.update", session: {
+    voice: "voice_592", response_format: "pcm", streaming_mode: "responsive" } });
+  await waitEvent(ttsWs, "session.updated");
+}
+
+// ---------- chat (SSE via our server) -> straight into TTS ----------
 async function runReply(userText) {
   history.push({ role: "user", content: userText });
   replyEl.textContent = "";
+  status("thinking + speaking…");
   await openTts();
   const r = await fetch("/api/chat", { method: "POST",
     headers: {"Content-Type":"application/json"},
@@ -199,14 +209,12 @@ async function runReply(userText) {
         if (delta) {
           full += delta;
           replyEl.textContent = full;
-          if (ttsWs.readyState === WebSocket.OPEN)
-            ttsWs.send(JSON.stringify({ type: "input_text.append", text: delta }));
+          send(ttsWs, { type: "input_text.append", text: delta });
         }
       } catch {}
     }
   }
-  if (ttsWs.readyState === WebSocket.OPEN)
-    ttsWs.send(JSON.stringify({ type: "input_text.flush" }));
+  send(ttsWs, { type: "input_text.flush" });
   history.push({ role: "assistant", content: full });
   timingsEl.textContent += ` | total ${((performance.now() - t0)/1000).toFixed(2)}s`;
 }
@@ -214,6 +222,7 @@ async function runReply(userText) {
 // ---------- turn control ----------
 function endTurn() {
   holding = false; turnActive = false;
+  if (endTimer) { clearTimeout(endTimer); endTimer = null; }
   pad.classList.remove("holding");
   pad.textContent = "Hold to talk";
   status("ready — hold the button (or SPACE) to talk");
@@ -221,19 +230,31 @@ function endTurn() {
 
 async function beginTurn() {
   if (turnActive) return;
+  ensureAudio();                      // AudioContext must start inside the gesture
   turnActive = true; holding = true; firstAudio = 0; t0 = performance.now();
   transcriptEl.textContent = ""; replyEl.textContent = ""; timingsEl.textContent = "";
   pad.classList.add("holding"); pad.textContent = "Listening…";
   status("transcribing live…");
-  if (!sttWs || sttWs.readyState !== WebSocket.OPEN) await openStt();
+  try { await openStt(); } catch (e) { status("STT connect error: " + e.message); endTurn(); return; }
+  // safety: never listen longer than MAX_TURN_MS
+  endTimer = setTimeout(stopListening, MAX_TURN_MS);
+}
+
+function stopListening() {
+  if (!turnActive) return;
+  holding = false;                    // stop streaming mic chunks
+  send(sttWs, { type: "input_audio.end" });
+  status("processing…");
+  // fallback: if transcription.done never arrives, reset anyway
+  if (doneFallback) clearTimeout(doneFallback);
+  doneFallback = setTimeout(endTurn, 5000);
 }
 
 pad.addEventListener("pointerdown", (e) => { e.preventDefault(); pad.setPointerCapture(e.pointerId); beginTurn(); });
-pad.addEventListener("pointerup", () => { if (holding && sttWs?.readyState === WebSocket.OPEN)
-  sttWs.send(JSON.stringify({ type: "input_audio.end" })); });
+pad.addEventListener("pointerup", stopListening);
+pad.addEventListener("pointercancel", stopListening);
 window.addEventListener("keydown", (e) => { if (e.code === "Space" && !e.repeat) { e.preventDefault(); beginTurn(); } });
-window.addEventListener("keyup", (e) => { if (e.code === "Space" && sttWs?.readyState === WebSocket.OPEN)
-  sttWs.send(JSON.stringify({ type: "input_audio.end" })); });
+window.addEventListener("keyup", (e) => { if (e.code === "Space") stopListening(); });
 
 (async () => {
   try {
