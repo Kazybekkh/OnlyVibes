@@ -1,0 +1,5 @@
+# Core package: zero dependencies (stdlib only) for the Voxtral REST client.
+# Install the extras below only for local mic/speaker use:
+sounddevice>=0.4.6   # microphone capture + playback (needs PortAudio system lib)
+numpy>=1.24          # PCM handling for the sounddevice backend
+soundfile>=0.12      # optional: decode mp3/ogg replies from Voxtral TTS

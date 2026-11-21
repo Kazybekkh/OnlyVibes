@@ -1,0 +1,78 @@
+# voice — pluggable voice interface (Mistral Voxtral)
+
+Add talk-and-listen to **any app**: the user speaks, Voxtral transcribes
+(`voxtral-mini-transcribe-3`), your app logic answers, Voxtral speaks the reply
+(`voxtral-mini-tts-3-0`). Every piece is swappable.
+
+```
+ mic ──► Recorder ──► STT (Voxtral) ──► Responder (YOUR app logic) ──► TTS (Voxtral) ──► Player ──► speaker
+```
+
+## Setup
+
+```bash
+pip install -r requirements.txt        # sounddevice+numpy only if you want local mic/speaker
+export MISTRAL_API_KEY=...             # https://console.mistral.ai  (see .env.example)
+```
+
+The API client itself is **stdlib-only** — no SDK to install for the Voxtral calls.
+
+## Use it in any app (3 levels)
+
+```python
+# 1) One-liner facade — defaults: Voxtral STT/TTS, Mistral chat responder, mic+speaker
+from voice import VoiceInterface
+voice = VoiceInterface()
+turn = voice.listen_and_reply()        # talk -> hear the reply
+print(turn.heard.text, "->", turn.reply_text)
+```
+
+```python
+# 2) Keep Voxtral speech, plug in YOUR brain (any str -> str callable)
+from voice import VoiceAgent, VoxtralSTT, VoxtralTTS, SoundDeviceRecorder, SoundDevicePlayer
+agent = VoiceAgent(
+    responder=my_app_logic,            # your agent / commands / RAG
+    stt=VoxtralSTT(), tts=VoxtralTTS(),
+    recorder=SoundDeviceRecorder(), player=SoundDevicePlayer(),
+)
+agent.turn()                           # one full voice turn
+```
+
+```python
+# 3) Fully custom — no mic, no Mistral: swap STT/TTS/audio I/O too
+from voice import VoiceAgent, FileRecorder, FilePlayer
+agent = VoiceAgent(responder=lambda t: f"echo: {t}",
+                   stt=MySTT(), tts=MyTTS(),
+                   recorder=FileRecorder("in.wav"), player=FilePlayer("."))
+```
+
+See `examples/plug_into_app.py` (level 3 runs fully offline).
+
+## CLI
+
+```bash
+python -m voice                          # press Enter, talk, hear the reply
+python -m voice --text "What time is it?" --no-play
+python -m voice --turns 3 --language en
+```
+
+## The plug points (protocols in `voice/interface.py`)
+
+| Piece | Protocol | Default | Swap with |
+|---|---|---|---|
+| mic → bytes | `Recorder.record()` | `SoundDeviceRecorder` | `FileRecorder`, browser WebSocket bridge, … |
+| bytes → text | `STT.transcribe()` | `VoxtralSTT` | Whisper, your own model, … |
+| text → reply text | `Responder` (`str -> str`) | Mistral chat (`mistral-small-latest`) | your agent, command router, … |
+| text → audio | `TTS.synthesize()` | `VoxtralTTS` | any TTS, cloned `voice_id`, … |
+| audio → speaker | `Player.play()` | `SoundDevicePlayer` | `FilePlayer`, `NullPlayer`, … |
+
+## Config (env vars)
+
+`MISTRAL_API_KEY` (required), `VOXTRAL_STT_MODEL`, `VOXTRAL_TTS_MODEL`,
+`VOXTRAL_VOICE_ID`, `VOICE_CHAT_MODEL`, `VOICE_SAMPLE_RATE`, `MISTRAL_API_BASE`.
+
+## API endpoints used (docs.mistral.ai)
+
+- `POST /v1/audio/transcriptions` — Voxtral Mini Transcribe 3 (speech → text)
+- `POST /v1/audio/speech` — Voxtral Mini TTS 3 (text → speech, preset/cloned voices)
+- `POST /v1/chat/completions` — default responder brain
