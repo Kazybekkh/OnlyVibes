@@ -7,6 +7,7 @@ Options:
   --no-play         don't play audio, just print
   --realtime        near-real-time streaming loop (Voxtral Realtime 3 STT +
                     streaming chat + realtime TTS); needs mic/speaker
+  --ptt             push-to-talk: hold the RIGHT OPTION key to talk (with --realtime)
 """
 
 from __future__ import annotations
@@ -25,26 +26,39 @@ def main() -> int:
     parser.add_argument("--max-seconds", type=float, default=30.0)
     parser.add_argument("--realtime", action="store_true",
                         help="streaming near-real-time voice loop")
+    parser.add_argument("--ptt", action="store_true",
+                        help="push-to-talk on RIGHT OPTION key (with --realtime)")
     args = parser.parse_args()
 
     if args.realtime:
         from .realtime import RealtimeVoiceAgent
         agent = RealtimeVoiceAgent()
+        gate = None
+        ptt = None
+        if args.ptt:
+            from .hotkey import PushToTalk
+            ptt = PushToTalk()
 
         async def run() -> int:
-            if args.text:
-                # feed text straight into the streaming LLM -> realtime TTS
-                from .realtime import streaming_chat_deltas
-                agent.player.start()
-                reply = await agent.tts.speak_stream(
-                    streaming_chat_deltas(args.text, system=agent.system),
-                    on_chunk=agent.player.write)
-                agent.player.finish()
-                print(f"assistant: {reply.text}")
-                print(f"[timings] {agent.last_timings or 'n/a'}")
+            if ptt is not None:
+                ptt.start()
+                gate = ptt.pressed
+            try:
+                if args.text:
+                    # feed text straight into the streaming LLM -> realtime TTS
+                    from .realtime import streaming_chat_deltas
+                    agent.player.start()
+                    reply = await agent.tts.speak_stream(
+                        streaming_chat_deltas(args.text, system=agent.system),
+                        on_chunk=agent.player.write)
+                    agent.player.finish()
+                    print(f"assistant: {reply.text}")
+                    return 0
+                await agent.converse(turns=args.turns, gate=gate)
                 return 0
-            await agent.converse(turns=args.turns)
-            return 0
+            finally:
+                if ptt is not None:
+                    ptt.stop()
         return asyncio.run(run())
 
     from .interface import VoiceInterface

@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.24",
     "soundfile>=0.12",
     "mistralai[realtime]>=1.0",
+    "pynput>=1.7.7",  # global hotkey listener for push-to-talk (right Option)
 ]
 
 [project.scripts]

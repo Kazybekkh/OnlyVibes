@@ -31,10 +31,12 @@ from .audio_io import (FilePlayer, FileRecorder, NullPlayer,
 from .realtime import (RealtimeVoiceAgent, SdkRealtimeSTT, SdkRealtimeTTS,
                         StreamingPlayer, StreamingRecorder,
                         streaming_chat_deltas)
+from .hotkey import PushToTalk
 
 __all__ = [
     "RealtimeVoiceAgent", "SdkRealtimeSTT", "SdkRealtimeTTS",
     "StreamingRecorder", "StreamingPlayer", "streaming_chat_deltas",
+    "PushToTalk",
     "VoiceInterface", "VoiceAgent", "default_responder",
     "Recorder", "Player", "STT", "TTS", "Responder",
     "Transcript", "Utterance", "ConversationTurn",

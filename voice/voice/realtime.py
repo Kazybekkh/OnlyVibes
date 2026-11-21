@@ -60,7 +60,14 @@ class StreamingRecorder:
         self.energy_threshold = energy_threshold
         self.max_seconds = max_seconds
 
-    async def stream(self) -> AsyncIterator[bytes]:
+    async def stream(self, gate: Optional[asyncio.Event] = None
+                     ) -> AsyncIterator[bytes]:
+        """Yield mic chunks.
+
+        gate=None  -> VAD mode: start on speech onset, stop after trailing silence.
+        gate=Event -> push-to-talk: wait for gate (key down), yield while held,
+                      stop when the gate clears (key up). max_seconds still caps.
+        """
         import numpy as np
         import sounddevice as sd
 
@@ -73,6 +80,20 @@ class StreamingRecorder:
                 loop.call_soon_threadsafe(q.put, indata.copy()))
         stream.start()
         try:
+            if gate is not None:
+                await gate.wait()  # key pressed
+                while not q.empty():  # discard pre-key backlog
+                    try:
+                        q.get_nowait()
+                    except queue.Empty:
+                        break
+                max_chunks = int(self.max_seconds * 1000 / CHUNK_MS)
+                for _ in range(max_chunks):
+                    if not gate.is_set():
+                        return  # key released
+                    chunk = await asyncio.to_thread(q.get)
+                    yield chunk.tobytes()
+                return
             pre_roll: List[bytes] = []
             speaking = False
             silence_chunks = 0
@@ -317,13 +338,13 @@ class RealtimeVoiceAgent:
                                              client=self._client)
         self.responder_deltas = responder_deltas
 
-    async def turn(self, language: Optional[str] = None,
-                   verbose: bool = True) -> ConversationTurn:
+    async def turn(self, language: Optional[str] = None, verbose: bool = True,
+                   gate: Optional[asyncio.Event] = None) -> ConversationTurn:
         t0 = time.perf_counter()
         timings: Dict[str, float] = {}
 
         heard = await self.stt.transcribe_stream(
-            self.recorder.stream(), language=language,
+            self.recorder.stream(gate=gate), language=language,
             on_delta=(lambda d: print(d, end="", flush=True)) if verbose else None)
         if verbose:
             print()
@@ -350,12 +371,15 @@ class RealtimeVoiceAgent:
                   f"total {timings['total_s']:.2f}s")
         return ConversationTurn(heard=heard, reply_text=reply.text, reply_audio=reply)
 
-    async def converse(self, turns: int = 3, verbose: bool = True
+    async def converse(self, turns: int = 3, verbose: bool = True,
+                       gate: Optional[asyncio.Event] = None
                        ) -> List[ConversationTurn]:
         out = []
         try:
-            for _ in range(turns):
-                out.append(await self.turn(verbose=verbose))
+            for i in range(turns):
+                if gate is not None and verbose:
+                    print(f"[turn {i + 1}/{turns}] hold RIGHT OPTION to talk, release to send...")
+                out.append(await self.turn(verbose=verbose, gate=gate))
         finally:
             await self.tts.close()
         return out

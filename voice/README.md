@@ -53,9 +53,15 @@ See `examples/plug_into_app.py` (level 3 runs fully offline).
 ```bash
 python -m voice                          # press Enter, talk, hear the reply
 python -m voice --realtime               # near-real-time streaming loop (mic required)
+python -m voice --realtime --ptt         # push-to-talk: hold RIGHT OPTION to talk, release to send
 python -m voice --text "What time is it?" --no-play
 python -m voice --turns 3 --language en
 ```
+
+`--ptt` listens globally for the right Option key (pynput, `Key.alt_r` /
+VK 0x3E). On macOS grant Accessibility permission to your terminal first
+(System Settings → Privacy & Security → Accessibility). Tested with the real
+mic: audio flows only while the key is held (first chunk ~0.13s after key-down).
 
 ## Near-real-time mode (`--realtime`)
 
