@@ -116,11 +116,15 @@ function ensureAudio() {
 function playPcm(b64) {
   ensureAudio();
   const bin = atob(b64);
-  const samples = new Int16Array(bin.length / 2);
-  for (let i = 0; i < samples.length; i++)
-    samples[i] = (bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8)) << 16 >> 16;
-  const buf = audioCtx.createBuffer(1, samples.length, TTS_RATE);
-  buf.copyToChannel(samples, 0);
+  const n = bin.length >> 1;
+  // copyToChannel requires Float32Array (Int16Array throws TypeError in Chrome)
+  const floats = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    floats[i] = (v << 16 >> 16) / 32768;   // signed int16 LE -> float [-1,1]
+  }
+  const buf = audioCtx.createBuffer(1, n, TTS_RATE);
+  buf.copyToChannel(floats, 0);
   const src = audioCtx.createBufferSource();
   src.buffer = buf; src.connect(audioCtx.destination);
   const now = audioCtx.currentTime;
@@ -164,7 +168,8 @@ async function openTts() {
     if (msg.type === "speech.audio.delta") {
       if (!firstAudio) { firstAudio = performance.now();
         timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s`; }
-      playPcm(msg.audio_data);
+      try { playPcm(msg.audio_data); }
+      catch (e) { status("audio playback error: " + e.message); console.error(e); }
     } else if (msg.type === "speech.audio.done") {
       const drainMs = Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000);
       setTimeout(endTurn, drainMs + 150);
