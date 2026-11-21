@@ -24,7 +24,7 @@ import traceback
 from dataclasses import dataclass
 
 from config import Settings
-from legacy import LegacyState
+from legacy import LegacyBrain, LegacyState, count_line
 from models import (
     ACTIVE_STATUSES,
     EVENT_KINDS,
@@ -71,6 +71,7 @@ class Hub:
         self.s = settings
         self.store = Store(settings.data_dir)
         self.legacy = LegacyState(settings.stale_after)
+        self.brain = LegacyBrain(settings.mistral_api_key, settings.mistral_model)
         self.lock = asyncio.Lock()
         self.conns: dict[str, WorkerConn] = {}
         self.board_peers: set[Peer] = set()
@@ -114,11 +115,18 @@ class Hub:
 
     async def start(self) -> None:
         self.load()
+
+        async def _brain_snapshot() -> dict:
+            """What brain.team_summary_loop asks Mistral about (takes the lock itself)."""
+            async with self.lock:
+                return self.legacy_view(now())
+
         self._loops = [
             asyncio.create_task(self._scheduler_loop(), name="ov-scheduler"),
             asyncio.create_task(self._saver_loop(), name="ov-saver"),
             asyncio.create_task(self._ping_loop(), name="ov-ping"),
             asyncio.create_task(self._flush_loop(), name="ov-flush"),
+            asyncio.create_task(self.brain.team_summary_loop(_brain_snapshot), name="ov-team-summary"),
         ]
 
     async def stop(self) -> None:
@@ -791,6 +799,8 @@ class Hub:
                     "pid": 0, "cpu": 0, "cwd": "",
                     "last_log": task["last_event"],
                     "summary": f"{task['key']} · {task['title']} — {task['progress']}%",
+                    # synthesized orchestra worker agent; brain.annotate keeps its summary as-is
+                    "agent_id": f"task:{tid}",
                 })
             match = by_ip.get(worker["tailscale_ip"]) if worker["tailscale_ip"] else None
             if match is not None:
@@ -804,6 +814,19 @@ class Hub:
                     # being drawn on top of it in the 3D view
                     by_ip[worker["tailscale_ip"]] = entry
         return laptops
+
+    def legacy_view(self, t: float) -> dict:
+        """The full WS /view frame: reporter + synthesized laptops, brain-annotated with
+        finished summaries and agent states, plus collision alerts and the team headline."""
+        laptops = self.legacy_laptops(t)
+        self.brain.annotate(laptops, t)
+        return {
+            "type": "state",
+            "ts": t,
+            "team_summary": self.brain.team_summary or count_line(laptops),
+            "alerts": self.brain.collisions(laptops, t),
+            "laptops": laptops,
+        }
 
     # ================================================================ human API
     def human_create_project(self, body: dict) -> dict:
