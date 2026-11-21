@@ -6,11 +6,13 @@ export const colors = {
   bg: '#f2f2f7',
   bgElevated: '#ffffff',
 
-  // label colors, light mode (system values, #3C3C43 family)
+  // label colors, light mode (system values, #3C3C43 family).
+  // Tertiary/quaternary alphas raised above Apple's 0.30/0.18 so small caption
+  // text still clears ~3:1 on the light background.
   label: '#000000',
-  labelSecondary: 'rgba(60,60,67,0.60)',
-  labelTertiary: 'rgba(60,60,67,0.30)',
-  labelQuaternary: 'rgba(60,60,67,0.18)',
+  labelSecondary: 'rgba(60,60,67,0.62)',
+  labelTertiary: 'rgba(60,60,67,0.55)',
+  labelQuaternary: 'rgba(60,60,67,0.38)',
 
   // system accent + semantics (light mode values)
   accent: '#007aff',
@@ -68,43 +70,45 @@ export const type = {
   caption2: { fontSize: 11, lineHeight: 13, fontWeight: '400' as const, letterSpacing: 0.07 },
 } as const;
 
-// Per-laptop accent palette — same cycle as web/index.html LAPTOP_COLORS
+// Per-laptop accent palette — same hue cycle as web/index.html LAPTOP_COLORS,
+// darkened to system-color values that keep >=4.5:1 text contrast on light bg
 export const laptopAccents = [
-  '#7dd3fc', '#f0abfc', '#86efac', '#fcd34d', '#fca5a5', '#c4b5fd',
+  '#007aff', '#af52de', '#248a3d', '#c77400', '#ff3b30', '#5e5ce6',
 ] as const;
 
 // Per-agent colors, keyed by base id ("claude-code · OnlyVibes › Explore" -> "claude-code")
+// (darkened from the web pastels for light-mode text contrast)
 export const agentColors: Record<string, string> = {
-  'vibe': '#7dd3fc',
-  'claude-code': '#f0abfc',
-  'codex': '#86efac',
-  'cursor': '#fcd34d',
+  'vibe': '#0891b2',
+  'claude-code': '#9333ea',
+  'codex': '#15803d',
+  'cursor': '#ca8a04',
 };
 export const agentColor = (name: string) =>
-  agentColors[name.split(/[ ·›#]/)[0].trim()] ?? '#e8ecf3';
+  agentColors[name.split(/[ ·›#]/)[0].trim()] ?? colors.labelSecondary;
 
-// Orchestra task/project status colors
+// Orchestra task/project status colors (light-mode readable)
 export const taskStatusColors: Record<string, string> = {
-  backlog: '#8e8e93',
-  todo: '#0a84ff',
-  claimed: '#ff9f0a',
-  in_progress: '#ff9f0a',
-  review: '#bf5af2',
-  done: '#30d158',
-  failed: '#ff453a',
-  cancelled: '#8e8e93',
+  backlog: '#6e6e73',
+  todo: '#007aff',
+  claimed: '#c77400',
+  in_progress: '#c77400',
+  review: '#8944c8',
+  done: '#1a7f37',
+  failed: '#d70015',
+  cancelled: '#6e6e73',
 };
 export const projectStatusColors: Record<string, string> = {
-  planning: '#ffd60a',
-  active: '#0a84ff',
-  done: '#30d158',
-  failed: '#ff453a',
+  planning: '#b25000',
+  active: '#007aff',
+  done: '#1a7f37',
+  failed: '#d70015',
 };
 
-// Per-state colors (server fill_agent() states)
+// Per-state colors (light-mode readable)
 export const stateColors: Record<string, string> = {
-  working: colors.green,
-  idle: colors.gray,
-  error: colors.orange,
-  stuck: colors.red,
+  working: '#1a7f37',
+  idle: '#6e6e73',
+  error: '#b25000',
+  stuck: '#d70015',
 };

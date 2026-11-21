@@ -118,11 +118,11 @@ export default function SettingsScreen() {
 
 function statusColor(status: string) {
   switch (status) {
-    case 'live': return colors.green;
-    case 'polling': return colors.orange;
+    case 'live': return '#1a7f37';
+    case 'polling': return '#c77400';
     case 'demo': return colors.accent;
-    case 'connecting': return colors.yellow;
-    default: return colors.red;
+    case 'connecting': return '#b25000';
+    default: return '#d70015';
   }
 }
 

@@ -1,12 +1,15 @@
 // Fleet tab — the main view: team headline + one glass card per laptop.
 import { useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Background } from '../../../components/Background';
 import { LaptopCard } from '../../../components/LaptopCard';
 import { TeamHeader } from '../../../components/TeamHeader';
 import { colors, type } from '../../../lib/theme';
 import { useServerConfig } from '../../../lib/server';
 import { useOnlyVibes } from '../../../lib/useOnlyVibes';
+
+// official wordmark (web/logo/wordmark.svg) as the in-page heading
+const WORDMARK = require('../../../assets/brand/wordmark.png');
 
 export default function FleetScreen() {
   const { url, demo, nonce } = useServerConfig();
@@ -26,6 +29,7 @@ export default function FleetScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        <Image source={WORDMARK} style={styles.wordmark} resizeMode="contain" />
         <TeamHeader
           summary={snapshot?.team_summary ?? ''}
           status={status}
@@ -65,18 +69,19 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 120, gap: 14 },
+  wordmark: { width: 132, height: 28, marginTop: 6, marginLeft: 4, marginBottom: -4 },
   sectionHead: {
     flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 10, marginBottom: -4, paddingHorizontal: 4,
   },
   sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label },
   sectionCount: { ...type.subhead, color: colors.labelSecondary },
   alertBanner: {
-    backgroundColor: 'rgba(255,69,58,0.14)',
+    backgroundColor: 'rgba(255,59,48,0.10)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,69,58,0.4)',
+    borderColor: 'rgba(255,59,48,0.35)',
     borderRadius: 18,
     padding: 12,
   },
-  alertText: { ...type.subhead, color: '#ffb4ae' },
+  alertText: { ...type.subhead, color: '#d70015', fontWeight: '600' },
   empty: { ...type.subhead, color: colors.labelSecondary, textAlign: 'center', marginTop: 40, lineHeight: 22 },
 });

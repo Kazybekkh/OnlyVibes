@@ -50,7 +50,7 @@ function TaskRow({ task }: { task: Task }) {
 }
 
 function WorkerRow({ w }: { w: Worker }) {
-  const c = w.status === 'busy' ? colors.orange : w.status === 'offline' ? colors.red : colors.green;
+  const c = w.status === 'busy' ? '#c77400' : w.status === 'offline' ? '#d70015' : '#1a7f37';
   return (
     <View style={styles.workerRow}>
       <View style={[styles.iconTile, { backgroundColor: `${c}22` }]}>

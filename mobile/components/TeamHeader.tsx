@@ -9,11 +9,11 @@ import { Glass } from './Glass';
 const MARK = require('../assets/brand/mark.png');
 
 const STATUS: Record<ConnStatus, { label: string; color: string; icon: string }> = {
-  live: { label: 'LIVE', color: colors.green, icon: 'dot.radiowaves.left.and.right' },
-  polling: { label: 'POLLING', color: colors.orange, icon: 'arrow.2.circlepath' },
+  live: { label: 'LIVE', color: '#1a7f37', icon: 'dot.radiowaves.left.and.right' },
+  polling: { label: 'POLLING', color: '#c77400', icon: 'arrow.2.circlepath' },
   demo: { label: 'DEMO', color: colors.accent, icon: 'play.circle' },
-  connecting: { label: 'CONNECTING', color: colors.yellow, icon: 'hourglass' },
-  offline: { label: 'OFFLINE', color: colors.red, icon: 'wifi.slash' },
+  connecting: { label: 'CONNECTING', color: '#b25000', icon: 'hourglass' },
+  offline: { label: 'OFFLINE', color: '#d70015', icon: 'wifi.slash' },
 };
 
 export function TeamHeader({
