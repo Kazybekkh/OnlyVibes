@@ -39,13 +39,18 @@ class MistralAPIError(RuntimeError):
 
 
 def load_dotenv(path: str = ".env") -> None:
-    """Load KEY=VALUE lines from a .env file (stdlib-only; never overrides
-    variables already set in the environment)."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError:
-        return
+    """Load KEY=VALUE lines from .env files (stdlib-only; never overrides
+    variables already set in the environment). Looks at `path` (cwd) and
+    the .env next to the voice/ package dir."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [path, os.path.join(here, ".env")]
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        break
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
