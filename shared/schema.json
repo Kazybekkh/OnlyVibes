@@ -4,24 +4,36 @@
   "title": "OnlyVibesStatus",
   "description": "One status message sent by a reporter every ~1s over WS /ws. The server stores the latest message per laptop and rebroadcasts all of them on WS /view.",
   "type": "object",
-  "required": ["laptop", "owner", "tailscale_ip", "ts", "agents"],
+  "required": [
+    "laptop",
+    "owner",
+    "tailscale_ip",
+    "ts",
+    "agents"
+  ],
   "additionalProperties": false,
   "properties": {
     "laptop": {
       "type": "string",
       "description": "Hostname of the laptop, e.g. platform.node()",
-      "examples": ["kay-mbp"]
+      "examples": [
+        "kay-mbp"
+      ]
     },
     "owner": {
       "type": "string",
       "description": "OS user that owns the laptop / runs the reporter",
-      "examples": ["kay"]
+      "examples": [
+        "kay"
+      ]
     },
     "tailscale_ip": {
       "type": "string",
       "description": "Tailscale IPv4 of the laptop (tailscale ip -4); unique key on the server",
       "pattern": "^\\d{1,3}(\\.\\d{1,3}){3}$",
-      "examples": ["100.64.0.11"]
+      "examples": [
+        "100.64.0.11"
+      ]
     },
     "ts": {
       "type": "number",
@@ -29,27 +41,66 @@
     },
     "agents": {
       "type": "array",
-      "description": "AI coding agent processes currently running on this laptop",
+      "description": "AI coding agent sessions currently running on this laptop: one entry per CLI session or desktop app, plus Claude Code subagents",
       "items": {
         "type": "object",
-        "required": ["name", "pid", "cpu", "cwd", "last_log", "summary"],
+        "required": [
+          "name",
+          "pid",
+          "cpu",
+          "cwd",
+          "last_log",
+          "summary"
+        ],
         "additionalProperties": false,
         "properties": {
           "name": {
             "type": "string",
-            "description": "Detected agent id",
-            "enum": ["vibe", "claude-code", "codex", "cursor"]
+            "description": "Unique, tick-stable display id. Starts with the agent id (vibe, claude-code, codex, cursor); sessions add ' · <project>' (and ' #2' for duplicates), subagents are '<parent name> › <subagent type>'",
+            "pattern": "^(vibe|claude-code|codex|cursor)",
+            "examples": [
+              "claude-code",
+              "claude-code · OnlyVibes",
+              "claude-code · OnlyVibes #2",
+              "claude-code · OnlyVibes › Explore"
+            ]
           },
-          "pid": { "type": "integer", "description": "OS process id" },
-          "cpu": { "type": "number", "description": "CPU percent of the process" },
-          "cwd": { "type": "string", "description": "Working directory of the process" },
+          "pid": {
+            "type": "integer",
+            "description": "OS process id"
+          },
+          "cpu": {
+            "type": "number",
+            "description": "CPU percent of the process"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Working directory of the process"
+          },
           "last_log": {
             "type": "string",
             "description": "Latest non-empty line tailed from the agent's log file (raw)"
           },
           "summary": {
             "type": "string",
-            "description": "One plain-English line produced by server summarize() from last_log; may be empty on arrival"
+            "description": "Short task title produced by server summarize() from last_log (max 6 words); may be empty on arrival or without MISTRAL_API_KEY"
+          },
+          "task": {
+            "type": "string",
+            "description": "Optional short title of what the agent is working on, set by the reporter (e.g. Claude Code session title); may be empty"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "session",
+              "subagent"
+            ],
+            "description": "Optional: desktop app, CLI/agent session, or a subagent spawned by a session"
+          },
+          "parent": {
+            "type": "string",
+            "description": "Optional (subagents only): name of the session entry that spawned this subagent"
           }
         }
       }
