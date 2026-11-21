@@ -1,6 +1,6 @@
 // Board tab — the orchestra view from GET /api/state: projects, tasks
 // (kanban-ish list with status + progress), and connected workers.
-import { SymbolView } from 'expo-symbols';
+import { Icon } from '../../../components/Icon';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Background } from '../../../components/Background';
 import { Glass } from '../../../components/Glass';
@@ -54,7 +54,7 @@ function WorkerRow({ w }: { w: Worker }) {
   return (
     <View style={styles.workerRow}>
       <View style={[styles.iconTile, { backgroundColor: `${c}22` }]}>
-        <SymbolView name="laptopcomputer" size={15} tintColor={c} />
+        <Icon name="laptopcomputer" size={15} color={c} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.workerName} numberOfLines={1}>{w.laptop} · {w.owner}</Text>
@@ -118,7 +118,7 @@ export default function BoardScreen() {
         {tasks.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>Tasks ({tasks.length})</Text>
-            <Glass style={styles.card}>
+            <Glass style={[styles.card, styles.list]}>
               {tasks.map((t, i) => (
                 <View key={t.id} style={i > 0 && styles.divider}>
                   <TaskRow task={t} />
@@ -131,7 +131,7 @@ export default function BoardScreen() {
         {workers.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>Workers ({workers.length})</Text>
-            <Glass style={styles.card}>
+            <Glass style={[styles.card, styles.list]}>
               {workers.map((w, i) => (
                 <View key={w.id} style={i > 0 && styles.divider}>
                   <WorkerRow w={w} />
@@ -151,6 +151,7 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 16, paddingBottom: 120, gap: 12 },
   sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label, marginTop: 10, marginBottom: -2, paddingHorizontal: 4 },
   card: { padding: 16, gap: 10 },
+  list: { paddingVertical: 8, gap: 0 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   cardTitle: { ...type.headline, color: colors.label, flex: 1 },
   pill: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999 },
@@ -159,7 +160,7 @@ const styles = StyleSheet.create({
   taskHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   taskKey: { ...type.caption2, fontWeight: '700' },
   taskTitle: { ...type.subhead, fontWeight: '600', color: colors.label, flex: 1 },
-  cpuTrack: { height: 5, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
+  cpuTrack: { height: 5, borderRadius: 999, backgroundColor: colors.track, overflow: 'hidden' },
   cpuFill: { height: '100%', borderRadius: 999 },
   meta: { ...type.caption1, color: colors.labelSecondary },
   workerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },

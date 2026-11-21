@@ -99,6 +99,9 @@ the large title collapses into the blurred nav bar on scroll.
 - expo-blur approximates `UIVisualEffectView` for custom surfaces; native
   headers get real materials via the iOS 26+ SDK (`headerBlurEffect`).
 - The tab-bar pill is a static capsule (React Navigation doesn't expose
-  `tabBarMinimizeBehavior` minimize-on-scroll; height/safe-area are left to
-  the navigator so the home-indicator inset is correct).
+  `tabBarMinimizeBehavior` minimize-on-scroll); it has a fixed height and
+  floats just above the home-indicator inset.
+- Icons are SF Symbols on iOS and the matching Material Symbols on
+  Android/web (`components/Icon.tsx`). Headers are transparent + large-title
+  only on iOS; Android/web get an opaque bar (`lib/headerOptions.ts`).
 - Server URL isn't persisted across app restarts yet (in-memory store).

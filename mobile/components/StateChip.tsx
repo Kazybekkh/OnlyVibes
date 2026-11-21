@@ -1,5 +1,6 @@
 // Pill chip for an agent's server-computed state (working / idle / error / stuck).
-import { SymbolView, type SFSymbol } from 'expo-symbols';
+import type { SFSymbol } from 'expo-symbols';
+import { Icon } from './Icon';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, stateColors, type } from '../lib/theme';
 import type { AgentState } from '../lib/types';
@@ -16,7 +17,7 @@ export function StateChip({ state }: { state: AgentState | undefined }) {
   const c = stateColors[s] ?? colors.gray;
   return (
     <View style={[styles.chip, { backgroundColor: `${c}26` }]}>
-      <SymbolView name={ICONS[s]} size={11} tintColor={c} />
+      <Icon name={ICONS[s]} size={11} color={c} />
       <Text style={[styles.label, { color: c }]}>{s}</Text>
     </View>
   );

@@ -48,7 +48,7 @@ export default function LaptopDetail() {
         </Glass>
 
         <Text style={styles.sectionTitle}>Agents ({laptop.agents?.length ?? 0})</Text>
-        <Glass style={styles.card}>
+        <Glass style={[styles.card, styles.list]}>
           {(laptop.agents ?? []).length === 0 && (
             <Text style={styles.empty}>No agents running on this laptop right now.</Text>
           )}
@@ -68,6 +68,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 60, gap: 12 },
   card: { padding: 16, gap: 8 },
+  list: { paddingVertical: 6, gap: 0 },
   name: { ...type.title2, fontWeight: '700' },
   meta: { ...type.subhead, color: colors.labelSecondary },
   sectionTitle: { ...type.title2, fontWeight: '700', color: colors.label, marginTop: 8, paddingHorizontal: 4 },

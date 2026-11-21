@@ -9,7 +9,7 @@ export function Glass({
   children,
   style,
   material = 'thin',
-  tint = 'dark',
+  tint = 'light',
   radius: r = radius.card,
   border = true,
 }: {
@@ -34,7 +34,7 @@ export function Glass({
       <View style={[StyleSheet.absoluteFill, { borderRadius: r, backgroundColor: m.fill }]} />
       {/* inset top highlight — the "edge light" that makes glass read as glass */}
       <View style={[styles.edge, { borderRadius: r }]} pointerEvents="none" />
-      <View style={[styles.content, { borderRadius: r }]}>{children}</View>
+      {children}
     </View>
   );
 }
@@ -48,8 +48,5 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0, left: 0, right: 0, height: 1,
     backgroundColor: colors.glassEdgeLight,
-  },
-  content: {
-    overflow: 'hidden',
   },
 });

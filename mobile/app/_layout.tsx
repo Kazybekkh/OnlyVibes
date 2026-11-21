@@ -1,12 +1,13 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { headerOptions } from '../lib/headerOptions';
 import { colors } from '../lib/theme';
 
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -17,13 +18,9 @@ export default function RootLayout() {
         <Stack.Screen
           name="laptop/[key]"
           options={{
+            ...headerOptions,
             presentation: 'card',
-            headerShown: true,
-            headerTransparent: true,
-            headerTintColor: colors.label,
-            headerTitleStyle: { fontWeight: '700', color: colors.label },
-            headerBlurEffect: 'systemUltraThinMaterialDark',
-            headerStyle: { backgroundColor: 'transparent' },
+            headerLargeTitle: false,
           }}
         />
       </Stack>

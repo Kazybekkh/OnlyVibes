@@ -1,22 +1,9 @@
 import { Stack } from 'expo-router';
-import { colors } from '../../../lib/theme';
+import { headerOptions } from '../../../lib/headerOptions';
 
 export default function AlertsStack() {
   return (
-    <Stack
-      screenOptions={{
-        headerShown: true,
-        headerTransparent: true,
-        headerLargeTitle: true,
-        headerLargeTitleShadowVisible: false,
-        headerTintColor: colors.label,
-        headerTitleStyle: { fontWeight: '700', color: colors.label },
-        headerLargeTitleStyle: { color: colors.label },
-        headerBlurEffect: 'systemUltraThinMaterialDark',
-        headerStyle: { backgroundColor: 'transparent' },
-        contentStyle: { backgroundColor: colors.bg },
-      }}
-    >
+    <Stack screenOptions={headerOptions}>
       <Stack.Screen name="index" options={{ title: 'Alerts', headerTitle: 'Alerts' }} />
     </Stack>
   );

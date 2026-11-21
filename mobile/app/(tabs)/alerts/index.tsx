@@ -1,6 +1,6 @@
 // Alerts tab — failed orchestra tasks + recent inter-agent messages
 // (and collision alerts when talking to a legacy pre-orchestra hub).
-import { SymbolView } from 'expo-symbols';
+import { Icon } from '../../../components/Icon';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Background } from '../../../components/Background';
 import { Glass } from '../../../components/Glass';
@@ -31,7 +31,7 @@ export default function AlertsScreen() {
         {alerts.length === 0 && failed.length === 0 ? (
           <Glass style={styles.card}>
             <View style={styles.emptyRow}>
-              <SymbolView name="checkmark.shield" size={22} tintColor={colors.green} />
+              <Icon name="checkmark.shield" size={22} color={colors.green} />
               <Text style={styles.emptyText}>Nothing failing — all tasks are on track.</Text>
             </View>
           </Glass>
@@ -40,7 +40,7 @@ export default function AlertsScreen() {
             {alerts.map((a, i) => (
               <Glass key={`legacy:${i}`} style={styles.card}>
                 <View style={styles.alertHead}>
-                  <SymbolView name="exclamationmark.triangle.fill" size={18} tintColor={colors.red} />
+                  <Icon name="exclamationmark.triangle.fill" size={18} color={colors.red} />
                   <Text style={styles.alertKind}>collision</Text>
                 </View>
                 <Text style={styles.alertText}>{a.text}</Text>
@@ -50,7 +50,7 @@ export default function AlertsScreen() {
             {failed.map((t) => (
               <Glass key={t.id} style={styles.card}>
                 <View style={styles.alertHead}>
-                  <SymbolView name="xmark.octagon.fill" size={18} tintColor={colors.red} />
+                  <Icon name="xmark.octagon.fill" size={18} color={colors.red} />
                   <Text style={styles.alertKind}>{t.key} failed</Text>
                 </View>
                 <Text style={styles.alertText}>{t.title}</Text>
@@ -68,7 +68,7 @@ export default function AlertsScreen() {
         <View style={styles.sectionHead}>
           <Text style={styles.sectionTitle}>Messages</Text>
         </View>
-        <Glass style={styles.card}>
+        <Glass style={[styles.card, { gap: 0 }]}>
           {messages.length === 0 ? (
             <Text style={styles.emptyText}>
               {status === 'demo' ? 'Demo messages below soon.' : 'No messages yet.'}

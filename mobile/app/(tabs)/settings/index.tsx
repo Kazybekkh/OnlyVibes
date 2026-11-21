@@ -1,6 +1,6 @@
 // Settings tab — hub server URL, demo mode, reconnect, about.
 import * as Haptics from 'expo-haptics';
-import { SymbolView } from 'expo-symbols';
+import { Icon } from '../../../components/Icon';
 import { useState } from 'react';
 import {
   Image,
@@ -65,7 +65,7 @@ export default function SettingsScreen() {
             onPress={apply}
             style={({ pressed }) => [styles.button, pressed && { opacity: 0.7 }]}
           >
-            <SymbolView name="arrow.clockwise" size={16} tintColor="#fff" />
+            <Icon name="arrow.clockwise" size={16} color="#fff" />
             <Text style={styles.buttonText}>Reconnect</Text>
           </Pressable>
           {/* glass-prominent style: accent-tinted translucent fill + rim */}
@@ -88,7 +88,7 @@ export default function SettingsScreen() {
             <Switch
               value={cfg.demo}
               onValueChange={(demo) => setServerConfig({ demo, nonce: cfg.nonce + 1 })}
-              trackColor={{ false: 'rgba(255,255,255,0.15)', true: colors.accent }}
+              trackColor={{ false: 'rgba(0,0,0,0.15)', true: colors.accent }}
               thumbColor="#fff"
             />
           </View>
@@ -97,7 +97,7 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>About</Text>
         <Glass style={styles.card}>
           <Image
-            source={require('../../../assets/brand/wordmark-dark.png')}
+            source={require('../../../assets/brand/wordmark.png')}
             style={styles.wordmark}
             resizeMode="contain"
           />
@@ -135,8 +135,10 @@ const styles = StyleSheet.create({
   label: { ...type.subhead, fontWeight: '600', color: colors.label },
   input: {
     ...type.body,
+    // web renders <input> unpositioned, which would paint under Glass's blur layers
+    position: 'relative',
     color: colors.label,
-    backgroundColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: colors.inputBg,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 11,
@@ -146,10 +148,8 @@ const styles = StyleSheet.create({
   hint: { ...type.caption1, color: colors.labelTertiary, lineHeight: 17 },
   button: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    // prominent glass: accent tint at ~30% over dark glass + lighter rim
-    backgroundColor: 'rgba(10,132,255,0.30)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(10,132,255,0.55)',
+    // prominent (filled) button — solid accent, white label, capsule
+    backgroundColor: colors.accent,
     borderRadius: radius.pill,
     paddingVertical: 12, marginTop: 2,
   },

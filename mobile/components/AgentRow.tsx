@@ -1,6 +1,7 @@
 // One agent on a laptop: icon tile, base name + session suffix (wraps, never
 // clips), state chip, pid/cpu meta, cpu meter, summary + raw log.
-import { SymbolView } from 'expo-symbols';
+import type { SFSymbol } from 'expo-symbols';
+import { Icon } from './Icon';
 import { Image, StyleSheet, Text, View, type ImageSourcePropType } from 'react-native';
 import { agentColor, colors, type } from '../lib/theme';
 import { agentBase, type Agent } from '../lib/types';
@@ -14,7 +15,7 @@ const AGENT_LOGOS: Record<string, ImageSourcePropType> = {
   'cursor': require('../assets/brand/logos/cursor.png'),
 };
 
-const AGENT_ICONS: Record<string, string> = {
+const AGENT_ICONS: Record<string, SFSymbol> = {
   'vibe': 'sparkles',
   'claude-code': 'asterisk.circle',
   'codex': 'chevron.left.forwardslash.chevron.right',
@@ -32,7 +33,7 @@ export function AgentRow({ agent, showLog = false }: { agent: Agent; showLog?: b
         {AGENT_LOGOS[base] ? (
           <Image source={AGENT_LOGOS[base]} style={styles.logo} resizeMode="contain" />
         ) : (
-          <SymbolView name={(AGENT_ICONS[base] ?? 'sparkles') as never} size={15} tintColor={c} />
+          <Icon name={AGENT_ICONS[base] ?? 'sparkles'} size={15} color={c} />
         )}
       </View>
       <View style={styles.body}>
@@ -87,7 +88,7 @@ const styles = StyleSheet.create({
   pid: { ...type.caption1, color: colors.labelTertiary },
   cpuTrack: {
     marginTop: 6, height: 5, borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.08)', overflow: 'hidden',
+    backgroundColor: colors.track, overflow: 'hidden',
   },
   cpuFill: { height: '100%', borderRadius: 999, opacity: 0.9 },
   summary: { ...type.subhead, color: colors.label, marginTop: 6, lineHeight: 20 },

@@ -2,41 +2,45 @@
 // Approximates native UIVisualEffectView materials with expo-blur + translucency.
 
 export const colors = {
-  // app backdrop (matches web/index.html scene background)
-  bg: '#0b0e14',
-  bgElevated: '#101728',
+  // app backdrop — light mode (systemGroupedBackground family)
+  bg: '#f2f2f7',
+  bgElevated: '#ffffff',
 
-  // label colors on dark backgrounds (system dark-mode values, #EBEBF5 family)
-  label: '#ffffff',
-  labelSecondary: 'rgba(235,235,245,0.60)',
-  labelTertiary: 'rgba(235,235,245,0.30)',
-  labelQuaternary: 'rgba(235,235,245,0.18)',
+  // label colors, light mode (system values, #3C3C43 family)
+  label: '#000000',
+  labelSecondary: 'rgba(60,60,67,0.60)',
+  labelTertiary: 'rgba(60,60,67,0.30)',
+  labelQuaternary: 'rgba(60,60,67,0.18)',
 
-  // system accent + semantics (dark mode values)
-  accent: '#0a84ff',
-  accentSoft: 'rgba(10,132,255,0.16)',
-  green: '#30d158',
-  yellow: '#ffd60a',
-  orange: '#ff9f0a',
-  red: '#ff453a',
-  gray: '#8e8e93', // systemGray, dark mode
+  // system accent + semantics (light mode values)
+  accent: '#007aff',
+  accentSoft: 'rgba(0,122,255,0.12)',
+  green: '#248a3d',
+  yellow: '#ffcc00',
+  orange: '#ff9500',
+  red: '#ff3b30',
+  gray: '#8e8e93',
 
-  // glass
-  glassBorder: 'rgba(255,255,255,0.10)',
-  glassBorderStrong: 'rgba(255,255,255,0.18)',
-  glassEdgeLight: 'rgba(255,255,255,0.16)', // inset top highlight faking the glass edge
+  // glass (light)
+  glassBorder: 'rgba(0,0,0,0.08)',
+  glassBorderStrong: 'rgba(0,0,0,0.14)',
+  glassEdgeLight: 'rgba(255,255,255,0.70)', // inset top highlight faking the glass edge
 
-  separator: 'rgba(84,84,88,0.60)',
+  separator: 'rgba(60,60,67,0.29)',
+
+  // neutral fills used by meters / inputs
+  track: 'rgba(0,0,0,0.08)',
+  inputBg: 'rgba(0,0,0,0.05)',
 } as const;
 
-// Liquid Glass / material hierarchy (Apple HIG materials, dark mode).
+// Liquid Glass / material hierarchy (Apple HIG materials, light mode).
 // `intensity` = expo-blur 1-100, `fill` = translucent overlay under the blur
 // (also the Android/web fallback where no real blur exists).
 export const glass = {
-  clear:   { intensity: 20, fill: 'rgba(0,0,0,0.15)' },  // over media
-  regular: { intensity: 70, fill: 'rgba(28,28,30,0.45)' }, // tab bar / nav bar / toolbars
-  thin:    { intensity: 35, fill: 'rgba(28,28,30,0.55)' }, // glass cards in content
-  thick:   { intensity: 95, fill: 'rgba(44,44,46,0.70)' }, // sheets / popovers
+  clear:   { intensity: 20, fill: 'rgba(255,255,255,0.25)' }, // over media
+  regular: { intensity: 70, fill: 'rgba(255,255,255,0.55)' }, // tab bar / nav bar / toolbars
+  thin:    { intensity: 35, fill: 'rgba(255,255,255,0.65)' }, // glass cards in content
+  thick:   { intensity: 95, fill: 'rgba(255,255,255,0.80)' }, // sheets / popovers
 } as const;
 
 // Continuous ("concentric") corner radii, iOS 26 style

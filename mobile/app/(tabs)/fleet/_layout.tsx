@@ -1,24 +1,23 @@
-// Fleet stack: transparent, blurred nav bar with a collapsing iOS large title.
+// Fleet stack: transparent, blurred nav bar; the nav heading is the official
+// OnlyVibes wordmark (web/logo/wordmark.svg), not text.
 import { Stack } from 'expo-router';
-import { colors } from '../../../lib/theme';
+import { Image } from 'react-native';
+import { headerOptions } from '../../../lib/headerOptions';
+
+const WORDMARK = require('../../../assets/brand/wordmark.png');
 
 export default function FleetStack() {
   return (
-    <Stack
-      screenOptions={{
-        headerShown: true,
-        headerTransparent: true,
-        headerLargeTitle: true,
-        headerLargeTitleShadowVisible: false,
-        headerTintColor: colors.label,
-        headerTitleStyle: { fontWeight: '700', color: colors.label },
-        headerLargeTitleStyle: { color: colors.label },
-        headerBlurEffect: 'systemUltraThinMaterialDark',
-        headerStyle: { backgroundColor: 'transparent' },
-        contentStyle: { backgroundColor: colors.bg },
-      }}
-    >
-      <Stack.Screen name="index" options={{ title: 'OnlyVibes', headerTitle: 'OnlyVibes' }} />
+    <Stack screenOptions={headerOptions}>
+      <Stack.Screen
+        name="index"
+        options={{
+          title: 'OnlyVibes',
+          headerTitle: () => (
+            <Image source={WORDMARK} style={{ width: 74, height: 16 }} resizeMode="contain" />
+          ),
+        }}
+      />
     </Stack>
   );
 }

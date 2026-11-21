@@ -1,6 +1,6 @@
 // Glass card for one laptop on the Fleet tab. Tapping opens /laptop/[key].
 import { Link } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
+import { Icon } from './Icon';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, laptopAccents, radius, type } from '../lib/theme';
 import { laptopKey, type Laptop } from '../lib/types';
@@ -17,7 +17,7 @@ export function LaptopCard({ laptop, index }: { laptop: Laptop; index: number })
         <Glass style={styles.card}>
           <View style={styles.head}>
             <View style={[styles.iconTile, { backgroundColor: `${accent}22` }]}>
-              <SymbolView name="laptopcomputer" size={18} tintColor={accent} />
+              <Icon name="laptopcomputer" size={18} color={accent} />
             </View>
             <View style={styles.headText}>
               <Text style={styles.name} numberOfLines={1}>{laptop.laptop}</Text>
