@@ -78,6 +78,20 @@ open 'x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Pri
 If you skip this, just run `--realtime` without `--ptt` — VAD mode needs no
 special permissions.
 
+## Browser webapp (no terminal, no Accessibility permission)
+
+```bash
+uv run python -m voice.webapp        # http://localhost:8090  (PORT env to change)
+```
+
+Open the page, allow the **microphone** in the browser prompt, then hold the
+big button (or hold SPACE) to talk — release to send. The API key never
+leaves the server: `/api/token` mints short-lived `rt_*` tokens
+(`POST /v1/client/sessions`), the browser opens the Voxtral realtime
+STT/TTS websockets directly with `Sec-WebSocket-Protocol: ["realtime", token]`,
+and `/api/chat` is an SSE proxy for the streaming LLM. Live transcript deltas
+and streamed reply audio (48 kHz PCM via Web Audio) included.
+
 ## Near-real-time mode (`--realtime`)
 
 Every stage streams, via the official `mistralai[realtime]` SDK:
