@@ -37,11 +37,11 @@ INTERVAL = float(os.environ.get("INTERVAL", "1"))
 # Match on the EXECUTABLE name only (basename of cmdline[0], fallback to
 # proc.name()) — never a substring of the full cmdline. Exact equality, so
 # "Cursor Helper (Renderer)" etc. never match "cursor".
-AGENT_EXE_NAMES: dict[str, str] = {
-    "vibe": "vibe",
-    "claude-code": "claude",
-    "codex": "codex",
-    "cursor": "cursor",  # main Cursor app only; helpers have their own exe names
+AGENT_EXE_NAMES: dict[str, set[str]] = {
+    "vibe": {"vibe", "vibe-rs"},  # vibe-rs = Rust CLI binary the `vibe` shim execs into
+    "claude-code": {"claude"},
+    "codex": {"codex"},
+    "cursor": {"cursor"},  # main Cursor app only; helpers have their own exe names
 }
 
 # never report our own stack
@@ -85,11 +85,24 @@ def tailscale_ip() -> str:
 
 
 def exe_name(info: dict) -> str:
-    """Executable name: basename of cmdline[0], falling back to proc.name()."""
-    cmdline = info.get("cmdline") or []
-    if cmdline and cmdline[0]:
-        return os.path.basename(str(cmdline[0])).lower()
-    return (info.get("name") or "").lower()
+    """Executable name used for agent matching.
+
+    basename of cmdline[0] — unless that is a python/node interpreter
+    (python, python3, python3.x, node), in which case skip interpreter flags
+    (args starting with "-") and use basename of the first real argument,
+    i.e. the script/binary being run: `node /usr/local/bin/vibe` -> "vibe",
+    `python3 -u -m vibe` -> "vibe". Falls back to proc.name() if no cmdline.
+    """
+    cmdline = [str(c) for c in (info.get("cmdline") or []) if c]
+    if not cmdline:
+        return (info.get("name") or "").lower()
+    base = os.path.basename(cmdline[0]).lower()
+    if base == "node" or base.startswith("python"):
+        for arg in cmdline[1:]:
+            if arg.startswith("-"):
+                continue  # skip interpreter flags (-u, -m, ...)
+            return os.path.basename(arg).lower()
+    return base
 
 
 def detect_agents() -> list[dict]:
@@ -110,7 +123,7 @@ def detect_agents() -> list[dict]:
             continue
         exe = exe_name(proc.info)
         for agent_name, wanted in AGENT_EXE_NAMES.items():
-            if exe == wanted:
+            if exe in wanted:
                 p = _PROCS.setdefault(pid, proc)
                 try:
                     cpu = round(p.cpu_percent(None), 1)  # non-blocking since last tick
