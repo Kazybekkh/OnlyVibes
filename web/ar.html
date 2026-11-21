@@ -60,6 +60,41 @@
   #xroverlay #recenterBtn { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 40;
     padding: 12px 22px; border-radius: 999px; border: 0; background: rgba(125,211,252,.95); color: #08222f;
     font: 700 16px/1 ui-sans-serif, system-ui, sans-serif; }
+  /* laptop spectator: must beat the ARButton rule (#app button, body > button) */
+  #specbar { display: none; }
+  body.spectate #specbar { display: block; }
+  body.spectate #voicebar, body.spectate #xroverlay { display: none !important; }
+  #specwait { position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%); z-index: 40;
+    padding: 18px 28px; border-radius: 14px; background: rgba(8,12,20,0.9);
+    border: 1px solid rgba(125,211,252,.45); font: 700 22px/1.25 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .02em; pointer-events: none; text-align: center; }
+  #specwait.hidden { display: none; }
+  #speccontrols { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40;
+    display: flex; gap: 12px; align-items: center; pointer-events: auto; }
+  body.spectate #specbar button {
+    position: static !important; left: auto !important; bottom: auto !important; transform: none !important;
+    padding: 12px 20px !important; border-radius: 999px !important; border: 0 !important;
+    background: #7dd3fc !important; color: #08222f !important;
+    font: 700 15px/1 ui-sans-serif, system-ui, sans-serif !important; cursor: pointer !important;
+  }
+  body.spectate #specbar .hint { font-size: 12px; opacity: .7; white-space: nowrap; }
+  #specpip { display: none; position: fixed; right: 16px; top: 52px; z-index: 25;
+    width: 32vw; height: 30vh; min-width: 240px; min-height: 150px;
+    border: 2px solid rgba(125,211,252,.9); border-radius: 10px; pointer-events: none;
+    box-shadow: 0 8px 28px rgba(0,0,0,.5); overflow: hidden; }
+  body.spectate #specpip { display: block; }
+  #specpip.hidden { display: none !important; }
+  #specpip span { position: absolute; left: 10px; top: 8px; padding: 3px 8px; border-radius: 6px;
+    background: rgba(8,12,20,.75); color: #7dd3fc; font: 700 11px/1 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: .04em; text-transform: uppercase; }
+  #specmic { display: none; position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%);
+    z-index: 41; padding: 10px 18px; border-radius: 999px; background: #7dd3fc; color: #08222f;
+    font: 700 15px/1 ui-sans-serif, system-ui, sans-serif; box-shadow: 0 6px 20px rgba(125,211,252,.35); }
+  body.spectate #specmic.on { display: block; }
+  #specact { display: none; position: fixed; left: 14px; bottom: 24px; z-index: 41;
+    font: 600 12px/1.45 ui-sans-serif, system-ui, sans-serif; color: #cfe7f5; opacity: .9;
+    max-width: 36vw; }
+  body.spectate #specact { display: block; }
 </style>
 <script type="importmap">
 {
@@ -83,6 +118,16 @@
   <button id="voiceEnable" type="button">🎙 Enable voice</button>
   <button id="voiceTalk" type="button" style="display:none">Hold to talk</button>
   <span class="hint">select an agent card, then hold B/Y in AR (Space on desktop) and speak its new prompt</span>
+</div>
+<div id="specbar">
+  <div id="specwait">Waiting for headset…</div>
+  <div id="specpip"><span id="specpipLabel">Headset view</span></div>
+  <div id="specmic">🎙 talking</div>
+  <div id="specact"></div>
+  <div id="speccontrols">
+    <button id="specViewBtn" type="button">First person</button>
+    <span class="hint">F first person · T third person · inset is the other view</span>
+  </div>
 </div>
 <script src="voice.js"></script>
 
@@ -451,7 +496,10 @@ const LAYOUT = {
 };
 // ?xrpreview=1: desktop preview of exactly what the headset sees at session start (camera = your eyes, 90 deg FOV)
 const XR_PREVIEW = new URLSearchParams(location.search).has('xrpreview');
-const IN_AR = () => renderer.xr.isPresenting || XR_PREVIEW;
+// /spectate or ?spectate=1: laptop audience view of the live headset pose (no WebXR on this machine)
+const SPECTATE = new URLSearchParams(location.search).has('spectate')
+  || /\/spectate\/?$/.test(location.pathname);
+const IN_AR = () => renderer.xr.isPresenting || XR_PREVIEW || SPECTATE;
 function columnExtent(g) {  // [bottom, top] of a laptop column in its own units
   let top = 0.5;
   for (const c of g.userData.cards.values()) top = Math.max(top, c.position.y + c.scale.y / 2);
@@ -578,14 +626,16 @@ arButton.textContent = '📱 Enter AR';
 // Enter VR, ?mode=ar only Enter AR; default both. Unsupported devices get a disabled "VR NOT SUPPORTED".
 const MODE = (new URLSearchParams(location.search).get('mode') || '').toLowerCase();
 const vrButton = VRButton.createButton(renderer);
-if (MODE !== 'vr') document.body.appendChild(arButton);
-if (MODE !== 'ar') document.body.appendChild(vrButton);
-if (!MODE) document.body.classList.add('both');
-// VRButton writes its label once support is known; give it ours
-new MutationObserver(() => {
-  if (vrButton.textContent === 'ENTER VR') vrButton.textContent = '🥽 Enter VR';
-  if (/NOT SUPPORTED|NOT ALLOWED|NEEDS HTTPS/.test(vrButton.textContent)) vrButton.classList.add('na');
-}).observe(vrButton, { childList: true, characterData: true, subtree: true });
+if (!SPECTATE) {
+  if (MODE !== 'vr') document.body.appendChild(arButton);
+  if (MODE !== 'ar') document.body.appendChild(vrButton);
+  if (!MODE) document.body.classList.add('both');
+  // VRButton writes its label once support is known; give it ours
+  new MutationObserver(() => {
+    if (vrButton.textContent === 'ENTER VR') vrButton.textContent = '🥽 Enter VR';
+    if (/NOT SUPPORTED|NOT ALLOWED|NEEDS HTTPS/.test(vrButton.textContent)) vrButton.classList.add('na');
+  }).observe(vrButton, { childList: true, characterData: true, subtree: true });
+}
 
 // virtual room for immersive-vr: dark gradient sky + subtle floor grid ~1.5 m below your head
 function skyTexture() {
@@ -717,6 +767,322 @@ function pollSticks(dt) {
 // control secret: open this page as /ar?key=<OV_CONTROL_SECRET>; the key is sent
 // with every control request (query param + X-OV-Key header)
 const CONTROL_KEY = new URLSearchParams(location.search).get('key') || '';
+
+// ---------------------------------------------------------------- headset pose -> laptop spectator (/spectate)
+const _poseP = new THREE.Vector3(), _poseQ = new THREE.Quaternion();
+let _poseBusy = 0, _poseLast = 0;
+function packPose(obj) {
+  obj.getWorldPosition(_poseP); obj.getWorldQuaternion(_poseQ);
+  return { pos: [_poseP.x, _poseP.y, _poseP.z], quat: [_poseQ.x, _poseQ.y, _poseQ.z, _poseQ.w] };
+}
+function collectXrPose() {
+  const cam = renderer.xr.getCamera();
+  const ctrls = controllers.map((c) => {
+    const src = c.userData.source;
+    const gp = src && src.gamepad;
+    const entry = { connected: !!src, hand: (src && src.handedness) || '' };
+    if (!entry.connected) return entry;
+    Object.assign(entry, packPose(c), {
+      trigger: !!(gp && gp.buttons[0] && gp.buttons[0].pressed),
+      squeeze: !!(gp && gp.buttons[1] && gp.buttons[1].pressed),
+      ray: (c.userData.ray && c.userData.ray.scale.z) || 0.5,
+    });
+    return entry;
+  });
+  let hover = null;
+  try {
+    for (const c of controllers) {
+      if (!c.userData.source) continue;
+      const hit = interactiveHit(rayFromController(c));
+      const u = hit && hit.object && hit.object.userData;
+      if (u && u.isCard) { hover = { ak: u.ak, laptop: u.laptopKey }; break; }
+    }
+  } catch (e) { /* interactiveHit is declared later; first frames may skip hover */ }
+  const talking = (typeof voiceHold !== 'undefined' && voiceHold === 1);
+  const vtext = (typeof lastVoiceText !== 'undefined' && lastVoiceText) ? String(lastVoiceText).slice(0, 200) : '';
+  return {
+    mode: xrMode || '',
+    head: packPose(cam),
+    controllers: ctrls,
+    world: Object.assign(packPose(world), { scale: world.scale.x }),
+    selected: selected ? { ak: selected.ak, laptop: selected.laptopKey } : null,
+    hover,
+    panel: !!(selected && typeof panel !== 'undefined' && panel.visible),
+    grabbed: !!(world.userData && world.userData.grabbedBy),
+    ptt: talking,
+    voice: vtext ? { text: vtext } : null,
+  };
+}
+function publishXrPose() {
+  const now = performance.now();
+  if (now - _poseLast < 50 || now < _poseBusy) return; // ~20 Hz, one in-flight request
+  _poseLast = now;
+  _poseBusy = now + 2000;
+  fetch('api/xrpose', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(CONTROL_KEY ? { 'X-OV-Key': CONTROL_KEY } : {}) },
+    body: JSON.stringify(collectXrPose()),
+    keepalive: true,
+  }).catch(() => {}).finally(() => { _poseBusy = 0; });
+}
+
+// ---------------------------------------------------------------- laptop spectator (desktop only, no WebXR)
+const specWait = document.getElementById('specwait');
+const specViewBtn = document.getElementById('specViewBtn');
+let specView = 'third'; // default: audience sees the scene + controllers
+let lastPose = null, lastPoseAt = -1e9, specSelKey = '';
+const _specHeadP = new THREE.Vector3(), _specHeadQ = new THREE.Quaternion();
+const _specTmpP = new THREE.Vector3(), _specTmpQ = new THREE.Quaternion();
+
+function makeHeadsetGizmo() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0x1c2433, roughness: 0.35, metalness: 0.4 });
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.1, 0.12), mat);
+  visor.position.z = 0.02;
+  g.add(visor);
+  const strap = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.012, 8, 16), mat);
+  strap.rotation.y = Math.PI / 2; strap.position.z = 0.04;
+  g.add(strap);
+  const lensMat = new THREE.MeshStandardMaterial({ color: 0x08222f, emissive: 0x7dd3fc, emissiveIntensity: 0.55, roughness: 0.2 });
+  for (const x of [-0.035, 0.035]) {
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.028, 20), lensMat);
+    lens.position.set(x, 0.005, -0.041); lens.rotation.y = Math.PI;
+    g.add(lens);
+  }
+  g.visible = false;
+  scene.add(g);
+  return g;
+}
+function makeSpecController(hand) {
+  const g = new THREE.Group();
+  const color = hand === 'left' ? 0xa5b4fc : 0x7dd3fc;
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.025, 0.11, 12),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.25 }));
+  body.rotation.x = Math.PI / 2;
+  body.position.z = 0.05;
+  g.add(body);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8),
+    new THREE.MeshStandardMaterial({ color: 0xf0f7ff, emissive: color, emissiveIntensity: 0.35 }));
+  tip.position.z = -0.01;
+  g.add(tip);
+  const ray = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }));
+  ray.scale.z = 0.5;
+  g.add(ray);
+  g.userData = { ray, tip, body, baseColor: color };
+  g.visible = false;
+  scene.add(g);
+  return g;
+}
+const specHeadset = makeHeadsetGizmo();
+const specControllers = [makeSpecController('left'), makeSpecController('right')];
+const pipCam = new THREE.PerspectiveCamera(80, 16 / 9, 0.05, 100);
+const pipChase = new THREE.PerspectiveCamera(55, 16 / 9, 0.05, 100);
+const specMic = document.getElementById('specmic');
+const specAct = document.getElementById('specact');
+const specPip = document.getElementById('specpip');
+const specPipLabel = document.getElementById('specpipLabel');
+const specPlate = makeCard({ fontPx: 22, bg: 'rgba(8,18,32,0.96)', fg: '#e8ecf3', scaleMul: 0.65 });
+specPlate.visible = false;
+const specMicDot = new THREE.Mesh(
+  new THREE.SphereGeometry(0.03, 12, 8),
+  new THREE.MeshStandardMaterial({ color: 0x7dd3fc, emissive: 0x7dd3fc, emissiveIntensity: 1.2 }));
+specMicDot.position.set(0, 0.1, 0);
+specMicDot.visible = false;
+specHeadset.add(specMicDot);
+
+function applyPacked(obj, packed) {
+  if (!packed || !packed.pos || !packed.quat) return;
+  obj.position.fromArray(packed.pos);
+  obj.quaternion.fromArray(packed.quat);
+}
+
+function cardByRef(ref) {
+  if (!ref) return null;
+  const g = laptopGroups.get(ref.laptop);
+  return (g && g.userData.cards.get(ref.ak)) || null;
+}
+
+function pipCssRect() {
+  const w = innerWidth, h = innerHeight;
+  const pw = Math.max(240, Math.round(w * 0.32));
+  const ph = Math.max(150, Math.round(h * 0.30));
+  return { right: 16, top: 52, w: pw, h: ph };
+}
+function layoutPipFrame() {
+  if (!specPip) return;
+  const r = pipCssRect();
+  specPip.style.width = r.w + 'px';
+  specPip.style.height = r.h + 'px';
+  specPip.style.right = r.right + 'px';
+  specPip.style.top = r.top + 'px';
+}
+function pipGlRect() {
+  const r = pipCssRect();
+  const pr = renderer.getPixelRatio();
+  return { x: (innerWidth - r.w - r.right) * pr, y: (innerHeight - r.h - r.top) * pr, w: r.w * pr, h: r.h * pr, aspect: r.w / r.h };
+}
+
+function setSpecView(mode) {
+  specView = mode === 'first' ? 'first' : 'third';
+  if (specViewBtn) specViewBtn.textContent = specView === 'first' ? 'Third person' : 'First person';
+  if (specPipLabel) specPipLabel.textContent = specView === 'first' ? 'Third person' : 'Headset view';
+  if (specView === 'first') {
+    orbit.enabled = false;
+    camera.fov = 80; camera.updateProjectionMatrix();
+  } else {
+    orbit.enabled = true;
+    camera.fov = 55; camera.updateProjectionMatrix();
+    if (lastPose && lastPose.head) {
+      _specHeadP.fromArray(lastPose.head.pos);
+      orbit.target.copy(_specHeadP);
+      camera.position.copy(_specHeadP).add(new THREE.Vector3(0.7, 0.85, 1.6));
+      orbit.update();
+    }
+  }
+  layoutPipFrame();
+}
+
+function tintSpecCards(pose) {
+  const sel = pose && pose.selected, hov = pose && pose.hover;
+  for (const g of laptopGroups.values()) {
+    const key = g.userData.key;
+    for (const [ak, card] of g.userData.cards) {
+      const isSel = !!(sel && sel.laptop === key && sel.ak === ak);
+      const isHov = !!(hov && hov.laptop === key && hov.ak === ak);
+      card.material.color.set(isSel ? 0x7dd3fc : isHov ? 0xffe680 : 0xffffff);
+    }
+  }
+}
+
+function updateSpecPanel(pose, live) {
+  const card = live && pose && pose.panel ? cardByRef(pose.selected) : null;
+  if (!card) { specPlate.visible = false; if (specPlate.parent) specPlate.parent.remove(specPlate); return; }
+  const g = card.userData.group;
+  if (specPlate.parent !== g) { if (specPlate.parent) specPlate.parent.remove(specPlate); g.add(specPlate); }
+  setCardText(specPlate, 'Control panel open\nFocus · Stop · Resume · Message');
+  specPlate.visible = true;
+  specPlate.position.copy(card.position);
+  specPlate.position.x += card.scale.x / 2 + specPlate.scale.x / 2 + 0.1;
+  specPlate.position.y += 0.04;
+}
+
+function updateSpectator(dt) {
+  const live = lastPose && (performance.now() - lastPoseAt) < 2000;
+  if (specWait) specWait.classList.toggle('hidden', !!live);
+  if (specPip) specPip.classList.toggle('hidden', !live);
+  // always a virtual room on the laptop (never a camera feed)
+  vrEnv.visible = true;
+  scene.background = vrSky;
+  grid.visible = false;
+  if (lastPose && lastPose.world) {
+    applyPacked(world, lastPose.world);
+    if (lastPose.world.scale) world.scale.setScalar(lastPose.world.scale);
+  }
+  if (lastPose && lastPose.head) {
+    applyPacked(specHeadset, lastPose.head);
+    _specHeadP.fromArray(lastPose.head.pos);
+    _specHeadQ.fromArray(lastPose.head.quat);
+  }
+  if (live) vrEnv.position.set(_specHeadP.x, _specHeadP.y - 1.5, _specHeadP.z);
+  else vrEnv.position.set(0, -1.5, 0);
+  const showRig = !!(live && lastPose && lastPose.head);
+  specHeadset.visible = showRig && specView !== 'first';
+  const ctrls = (lastPose && lastPose.controllers) || [];
+  specControllers.forEach((g, i) => {
+    const c = ctrls[i];
+    const on = !!(showRig && c && c.connected && c.pos && c.quat);
+    g.visible = on;
+    if (!on) return;
+    applyPacked(g, c);
+    g.userData.ray.scale.z = Math.max(0.05, c.ray || 0.5);
+    g.userData.ray.material.color.set(c.trigger || (lastPose && lastPose.hover) ? 0xffe680 : g.userData.baseColor);
+    g.userData.tip.material.emissiveIntensity = c.trigger || c.squeeze || (lastPose && lastPose.grabbed) ? 1.0 : 0.35;
+  });
+  tintSpecCards(live ? lastPose : null);
+  updateSpecPanel(lastPose, live);
+  const talking = !!(live && lastPose && lastPose.ptt);
+  specMicDot.visible = talking;
+  if (specMic) specMic.classList.toggle('on', talking);
+  if (specMic && talking && lastPose.voice && lastPose.voice.text) {
+    specMic.textContent = '🎙 ' + lastPose.voice.text;
+  } else if (specMic) {
+    specMic.textContent = '🎙 talking';
+  }
+  if (specAct) {
+    const bits = [];
+    if (live && lastPose.grabbed) bits.push('grabbing the scene');
+    if (live && lastPose.world && lastPose.world.scale) bits.push('scale ' + Number(lastPose.world.scale).toFixed(2));
+    if (live && lastPose.panel) bits.push('control panel open');
+    if (live && lastPose.hover) bits.push('pointing at ' + (lastPose.hover.ak || 'a card'));
+    if (live && lastPose.selected && !lastPose.panel) bits.push('selected ' + (lastPose.selected.ak || 'a card'));
+    if (!live) bits.push('laptops stay in this virtual room even before the headset joins');
+    specAct.textContent = bits.join(' · ');
+  }
+  const k = 1 - Math.exp(-dt * 14);
+  if (specView === 'first' && lastPose && lastPose.head) {
+    orbit.enabled = false;
+    camera.position.lerp(_specHeadP, k);
+    camera.quaternion.slerp(_specHeadQ, k);
+  } else {
+    orbit.enabled = true;
+    if (live) orbit.target.lerp(_specHeadP, 1 - Math.exp(-dt * 3));
+    orbit.update();
+  }
+  if (live && lastPose && lastPose.head) {
+    pipCam.position.copy(_specHeadP);
+    pipCam.quaternion.copy(_specHeadQ);
+    pipChase.position.copy(_specHeadP).add(new THREE.Vector3(0.7, 0.85, 1.6));
+    pipChase.lookAt(_specHeadP);
+  }
+  if (statusEl && performance.now() > statusHoldUntil) {
+    const n = laptopGroups.size;
+    statusEl.textContent = live
+      ? (`live · ${n} laptop${n === 1 ? '' : 's'} · ${specView === 'first' ? 'first person' : 'third person'}`)
+      : (`waiting for headset · ${n} laptop${n === 1 ? '' : 's'} in the room`);
+  }
+}
+
+if (SPECTATE) {
+  document.title = 'OnlyVibes: spectator';
+  document.body.classList.add('spectate');
+  const hudP = document.querySelector('#hud p');
+  if (hudP) hudP.innerHTML = 'virtual spectator · every connected laptop · inset is what the headset sees · <span id="count">0</span> laptops';
+  world.scale.setScalar(AR_SCALE);
+  grid.visible = false;
+  vrEnv.visible = true;
+  scene.background = vrSky;
+  vrEnv.position.set(0, -1.5, 0);
+  camera.position.set(0.4, 0.7, 2.0);
+  camera.lookAt(0, 0.1, -1.1);
+  orbit.target.set(0, 0.1, -1.1);
+  orbit.minDistance = 0.35;
+  orbit.maxDistance = 18;
+  orbit.update();
+  layoutPipFrame();
+  setSpecView('third');
+  if (specViewBtn) specViewBtn.addEventListener('click', () => setSpecView(specView === 'first' ? 'third' : 'first'));
+  addEventListener('keydown', (e) => {
+    if (e.key === 'f' || e.key === 'F') setSpecView('first');
+    if (e.key === 't' || e.key === 'T') setSpecView('third');
+  });
+  const poll = async () => {
+    try {
+      const r = await fetch('api/xrpose' + (CONTROL_KEY ? ('?key=' + encodeURIComponent(CONTROL_KEY)) : ''));
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data && data.pose) {
+        lastPose = data.pose;
+        lastPoseAt = performance.now() - (Number(data.age_ms) || 0);
+      }
+    } catch {}
+  };
+  poll();
+  setInterval(poll, 50);
+}
+
 
 // ---------------------------------------------------------------- voice prompt (web/voice.js, STT only)
 // Select an agent card (trigger / click) = voice target. Hold B/Y (xr-standard gamepad button 5) and speak;
@@ -1013,7 +1379,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   renderer.domElement.style.cursor = interactiveHit(raycaster.ray.clone()) ? 'pointer' : '';
 });
 addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
-window.__ov = { openPanel, closePanel, press, control, laptopGroups, panelButtons: () => panelButtons, camera, orbit };
+window.__ov = { openPanel, closePanel, press, control, laptopGroups, panelButtons: () => panelButtons, camera, orbit, specHeadset, specControllers, lastPose: () => lastPose, specView: () => specView };
 
 const _right = new THREE.Vector3();
 function updatePanel(parentQ, camQ) {
@@ -1044,27 +1410,58 @@ renderer.setAnimationLoop(() => {
     if (recenterFrames.length && xrFrame >= recenterFrames[0]) { recenterFrames.shift(); recenter(); }
     pollSticks(dt); updateRays(); pollVoiceButtons();
     if (!recenterFrames.length) watchOutOfView(renderer.xr.getCamera(), performance.now());
+    publishXrPose();
+  } else if (SPECTATE) {
+    updateSpectator(dt);
   } else orbit.update();
   // active camera: XR headset camera while presenting, desktop camera otherwise
   const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-  cam.getWorldQuaternion(_camQ);
-  updateVoiceCard(cam);
-  for (const g of laptopGroups.values()) {
-    g.updateWorldMatrix(true, false);
-    g.getWorldQuaternion(_parentQ).invert();
-    // billboard every text card (laptop label + agent cards) to face the camera
-    if (g.userData.label) g.userData.label.quaternion.copy(_parentQ).multiply(_camQ);
-    let j = 0;
-    for (const card of g.userData.cards.values()) {
-      card.quaternion.copy(_parentQ).multiply(_camQ);
-      j++;
+  function billboardTo(camObj) {
+    camObj.updateMatrixWorld();
+    camObj.getWorldQuaternion(_camQ);
+    for (const g of laptopGroups.values()) {
+      g.updateWorldMatrix(true, false);
+      g.getWorldQuaternion(_parentQ).invert();
+      if (g.userData.label) g.userData.label.quaternion.copy(_parentQ).multiply(_camQ);
+      for (const card of g.userData.cards.values()) card.quaternion.copy(_parentQ).multiply(_camQ);
+      if (selected && selected.card.userData.group === g) updatePanel(_parentQ, _camQ);
+      if (typeof specPlate !== 'undefined' && specPlate.visible && specPlate.parent === g) {
+        specPlate.quaternion.copy(_parentQ).multiply(_camQ);
+      }
     }
-    if (selected && selected.card.userData.group === g) updatePanel(_parentQ, _camQ);
   }
+  billboardTo(cam);
+  updateVoiceCard(cam);
+  const hideHeadForFp = SPECTATE && specView === 'first';
+  if (hideHeadForFp) specHeadset.visible = false;
+  renderer.autoClear = true;
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio());
   renderer.render(scene, camera);
+  if (SPECTATE && lastPose && lastPose.head && (performance.now() - lastPoseAt) < 2000) {
+    const r = pipGlRect();
+    pipCam.aspect = r.aspect; pipCam.updateProjectionMatrix();
+    pipChase.aspect = r.aspect; pipChase.updateProjectionMatrix();
+    const inset = specView === 'first' ? pipChase : pipCam;
+    const hideHead = inset === pipCam;
+    const wasHead = specHeadset.visible;
+    specHeadset.visible = !hideHead && !!(lastPose && lastPose.head);
+    billboardTo(inset);
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.setScissorTest(true);
+    renderer.setViewport(r.x, r.y, r.w, r.h);
+    renderer.setScissor(r.x, r.y, r.w, r.h);
+    renderer.render(scene, inset);
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio());
+    renderer.autoClear = true;
+    specHeadset.visible = wasHead;
+  }
+  if (hideHeadForFp) specHeadset.visible = false;
 });
 
-if (XR_PREVIEW) {
+if (XR_PREVIEW && !SPECTATE) {
   world.scale.setScalar(AR_SCALE); grid.visible = false; orbit.enabled = false;
   camera.fov = 90; camera.position.set(0, 0, 0); camera.lookAt(0, 0, -1); camera.updateProjectionMatrix();
   orbit.update = () => {};
@@ -1073,6 +1470,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (SPECTATE) layoutPipFrame();
 });
 </script>
 </body>
