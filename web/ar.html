@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>OnlyVibes — 3D / AR table</title>
+<link rel="icon" type="image/svg+xml" href="logo/mark.svg" />
 <style>
   html, body {
     margin: 0; height: 100%; overflow: hidden; background: #0b0e14; color: #e8ecf3;
@@ -18,7 +19,8 @@
     padding: 4px 8px; border: 1px solid rgba(232,236,243,.25); border-radius: 4px;
   }
   #back:hover, #back:focus-visible { opacity: 1; border-color: rgba(232,236,243,.6); }
-  #hud h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .5px; }
+  #hud h1 { margin: 0 0 6px; line-height: 0; }
+  #hud h1 img { height: 20px; width: auto; }
   #hud p  { font-size: 12px; margin: 0; opacity: .7; }
   #status { position: fixed; top: 12px; right: 14px; z-index: 10; font-size: 12px; opacity: .85; text-align: right; }
   /* ARButton injects its own button; pin it to the bottom center */
@@ -43,7 +45,7 @@
 <div id="app"></div>
 <div id="hud">
   <a id="back" href="./">&larr; Board</a>
-  <h1>OnlyVibes</h1>
+  <h1><img src="logo/onlyvibes-dark.svg" width="132" height="20" alt="OnlyVibes" /></h1>
   <p>live AI agents on every laptop · <span id="count">0</span> laptops · AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
 </div>
 <div id="status">connecting…</div>

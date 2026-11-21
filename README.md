@@ -1,4 +1,9 @@
-# OnlyVibes
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/logo/onlyvibes-dark.svg" />
+    <img src="web/logo/onlyvibes.svg" alt="OnlyVibes" width="528" height="80" />
+  </picture>
+</h1>
 
 A **Symphony-style agent orchestra over Tailscale**. You type a product prompt into the web board. An AI coding agent on one teammate's laptop breaks the product into a kanban board of tasks. Worker daemons on every laptop then claim those tasks and run their agent CLIs (Claude Code, Codex, Mistral Vibe, Cursor, or a mock) headless. The agents stream live transcripts and progress to the board, talk to each other across the network with the `ov` CLI, and push, open and merge PRs on a shared GitHub repo. The original live AR/3D view of the laptops is still there as a second tab.
 
