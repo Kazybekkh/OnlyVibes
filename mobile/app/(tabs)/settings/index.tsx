@@ -3,6 +3,7 @@ import * as Haptics from 'expo-haptics';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -95,6 +96,11 @@ export default function SettingsScreen() {
 
         <Text style={styles.sectionTitle}>About</Text>
         <Glass style={styles.card}>
+          <Image
+            source={require('../../../assets/brand/wordmark-dark.png')}
+            style={styles.wordmark}
+            resizeMode="contain"
+          />
           <Text style={styles.aboutTitle}>OnlyVibes</Text>
           <Text style={styles.aboutBody}>
             Live view of which AI coding agents (Vibe, Claude Code, Codex, Cursor) are running on each
@@ -153,6 +159,7 @@ const styles = StyleSheet.create({
   statusText: { ...type.caption2, color: colors.labelSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
   switchRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   switchLabel: { ...type.headline, color: colors.label },
+  wordmark: { width: 93, height: 20, marginBottom: 2 },
   aboutTitle: { ...type.title3, fontWeight: '600', color: colors.label },
   aboutBody: { ...type.subhead, color: colors.labelSecondary, lineHeight: 21 },
   aboutFoot: { ...type.caption1, color: colors.labelTertiary, fontFamily: 'Menlo' },

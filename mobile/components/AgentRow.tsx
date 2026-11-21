@@ -1,10 +1,18 @@
 // One agent on a laptop: icon tile, base name + session suffix (wraps, never
 // clips), state chip, pid/cpu meta, cpu meter, summary + raw log.
 import { SymbolView } from 'expo-symbols';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View, type ImageSourcePropType } from 'react-native';
 import { agentColor, colors, type } from '../lib/theme';
 import { agentBase, type Agent } from '../lib/types';
 import { StateChip } from './StateChip';
+
+// Official agent logos from web/logos/ (copied to assets/brand/logos/)
+const AGENT_LOGOS: Record<string, ImageSourcePropType> = {
+  'vibe': require('../assets/brand/logos/vibe.png'),
+  'claude-code': require('../assets/brand/logos/claude-code.png'),
+  'codex': require('../assets/brand/logos/codex.png'),
+  'cursor': require('../assets/brand/logos/cursor.png'),
+};
 
 const AGENT_ICONS: Record<string, string> = {
   'vibe': 'sparkles',
@@ -21,7 +29,11 @@ export function AgentRow({ agent, showLog = false }: { agent: Agent; showLog?: b
   return (
     <View style={styles.row}>
       <View style={[styles.iconTile, { backgroundColor: `${c}22` }]}>
-        <SymbolView name={(AGENT_ICONS[base] ?? 'sparkles') as never} size={15} tintColor={c} />
+        {AGENT_LOGOS[base] ? (
+          <Image source={AGENT_LOGOS[base]} style={styles.logo} resizeMode="contain" />
+        ) : (
+          <SymbolView name={(AGENT_ICONS[base] ?? 'sparkles') as never} size={15} tintColor={c} />
+        )}
       </View>
       <View style={styles.body}>
         <View style={styles.head}>
@@ -62,6 +74,7 @@ const styles = StyleSheet.create({
     marginTop: 1,
     flexShrink: 0,
   },
+  logo: { width: 18, height: 18, borderRadius: 4 },
   body: { flex: 1, minWidth: 0 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   nameWrap: {

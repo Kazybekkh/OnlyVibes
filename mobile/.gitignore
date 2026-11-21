@@ -42,3 +42,4 @@ yarn-error.*
 
 # generated dev-server QR (session-scoped tunnel URL)
 qr-expo-go.png
+qr-web.png

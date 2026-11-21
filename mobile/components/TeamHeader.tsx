@@ -1,10 +1,12 @@
 // Headline card under the large title: team summary + connection status pill.
-import { SymbolView } from 'expo-symbols';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import { colors, type } from '../lib/theme';
 import { useAgo } from '../lib/useAgo';
 import type { ConnStatus } from '../lib/useOnlyVibes';
 import { Glass } from './Glass';
+
+// pixel mark from web/logo/mark.svg
+const MARK = require('../assets/brand/mark.png');
 
 const STATUS: Record<ConnStatus, { label: string; color: string; icon: string }> = {
   live: { label: 'LIVE', color: colors.green, icon: 'dot.radiowaves.left.and.right' },
@@ -32,7 +34,7 @@ export function TeamHeader({
         <Text style={[styles.status, { color: st.color }]}>{st.label}</Text>
         {!!ago && <Text style={styles.ago}>{ago}</Text>}
         <View style={{ flex: 1 }} />
-        <SymbolView name={st.icon as never} size={14} tintColor={st.color} />
+        <Image source={MARK} style={styles.mark} resizeMode="contain" />
       </View>
       <Text style={styles.summary}>{summary || 'Waiting for the hub…'}</Text>
     </Glass>
@@ -45,5 +47,6 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 999 },
   status: { ...type.caption2, letterSpacing: 0.6 },
   ago: { ...type.caption2, color: colors.labelTertiary },
+  mark: { width: 26, height: 16, opacity: 0.9 },
   summary: { ...type.headline, color: colors.label, lineHeight: 23 },
 });
