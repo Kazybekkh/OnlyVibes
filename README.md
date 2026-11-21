@@ -77,6 +77,34 @@ Open the viewer from any device on the Tailnet: `http://<hub-tailscale-ip>:8000/
 | `MISTRAL_MODEL`   | server   | `mistral-small-latest`     | model used by `summarize()`                         |
 | `PORT`            | server   | `8000`                     | listen port when run as `uv run main.py`            |
 | `STALE_AFTER`     | server   | `5`                        | seconds before a silent laptop disappears from the view |
+| `VOICE_MIC`       | server   | `browser`                  | which role may talk: `browser` (Zapbox headset phone) or `web` (fallback `/mic` page) |
+| `VOICE_SPEAKER`   | server   | `browser`                  | where replies are spoken: `browser`, `web`, `mic` (same as mic), or `all` |
+| `VOICE_CHAT_MODEL`| server   | `MISTRAL_MODEL`            | LLM behind `/api/voice/chat` (grounded in the live snapshot) |
+| `MISTRAL_API_BASE`| server   | `https://api.mistral.ai/v1`| Mistral API base (token mint + chat + SSE)              |
+
+## Voice in Zapbox Browser (AR)
+
+A person wearing a Zapbox headset (iPhone inside) opens the hub in Zapbox Browser, taps **Enable voice**, enters AR,
+then **holds A/X (gamepad button 4)** to ask out loud and hears a grounded spoken answer on the iPhone, with a
+head-locked "you said / reply" card. Replies are grounded in the live agent data via `/api/voice/chat`.
+
+```bash
+cd server && uv run uvicorn main:app --host 0.0.0.0 --port 8000
+tailscale serve --bg 8000        # secure context required for mic + WebXR
+# iPhone → Zapbox Browser → https://<hub>.<tailnet>.ts.net/?role=browser
+```
+
+- Bookmark `https://<hub>.<tailnet>.ts.net/?role=browser`; tap **Enable voice** (mic permission) before **Enter AR**.
+- In AR: hold A/X to talk, release to send; **long-press B/Y (1 s)** toggles `mic: browser ⇄ web`.
+- Fallback mic when the headset browser blocks the mic: open `https://<hub>/mic` on another phone, set `mic=web`,
+  `speaker=browser` → talk into that phone, reply speaks in the headset.
+- Web toggle bar (bottom-right) switches mic source and speaker at runtime (`POST /api/voice/config`).
+- URL params: `?role=browser|web`, `?ptt=4|trigger`, `?switch=5`. Capability probe page: `/probe`
+  (results recorded in `voice/ZAPBOX_PROBE.md`).
+- Browser never sees the API key: `/api/voice/token` mints short-lived `rt_*` tokens
+  (`POST /v1/client/sessions`), and the page talks to the Voxtral realtime STT/TTS websockets directly
+  (`voxtral-mini-transcribe-realtime-3` / `voxtral-mini-tts-3-0`, PCM float32 @24 kHz).
+- Implementation plan: `voice/ZAPBOX_VOICE_PLAN.md`.
 
 ## Message schema (`shared/schema.json`)
 

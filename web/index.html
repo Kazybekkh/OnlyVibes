@@ -22,6 +22,20 @@
     background: #7dd3fc !important; color: #08222f !important;
     font: 600 15px/1 ui-sans-serif, system-ui, sans-serif !important; cursor: pointer !important;
   }
+  /* voice controls — hidden until /api/voice/health says voice is on.
+     Buttons live INSIDE #voicebar so the !important rule above (which only
+     matches #app button / direct body children) does not restyle them. */
+  #voicebar {
+    display: none; position: fixed; right: 14px; bottom: 24px; z-index: 30;
+    flex-direction: column; gap: 8px; align-items: flex-end;
+  }
+  @media (max-width: 600px) { #voicebar { bottom: 80px; } } /* don't cover the centered AR button */
+  #voicebar button, #voicebar select {
+    padding: 8px 14px; border-radius: 999px; border: 1px solid #4a5468;
+    background: rgba(20,26,38,0.92); color: #e8ecf3;
+    font: 600 13px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer;
+  }
+  #voicebar button.holding { background: #7dd3fc; color: #08222f; }
 </style>
 <script type="importmap">
 {
@@ -39,10 +53,29 @@
   <p>live AI agents on every laptop · <span id="count">0</span> laptops · AR needs HTTPS or localhost (try <code>tailscale serve</code>)</p>
 </div>
 <div id="status">connecting…</div>
+<div id="voicebar">
+  <button id="voiceEnable" type="button">Enable voice</button>
+  <button id="voiceTalk" type="button" style="display:none">Hold to talk</button>
+  <button id="micToggle" type="button">mic: browser</button>
+  <select id="speakerSel">
+    <option value="browser">browser</option>
+    <option value="web">web</option>
+    <option value="mic">mic</option>
+    <option value="all">all</option>
+  </select>
+</div>
 
+<script src="voice.js"></script>
 <script type="module">
 import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+// ---------------------------------------------------------------- URL params (voice role / gamepad)
+const params = new URLSearchParams(location.search);
+const ROLE = params.get('role') || 'web';
+const CLIENT_ID = crypto.randomUUID?.() || String(Math.random()).slice(2);
+const PTT = params.get('ptt') || '4';        // gamepad button index for A/X, or 'trigger'
+const SWITCH = +(params.get('switch') || 5);  // gamepad button index for B/Y
 
 // ---------------------------------------------------------------- renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -229,6 +262,109 @@ function applyState(snap) {
   document.getElementById('count').textContent = (snap.laptops || []).length;
 }
 
+// ---------------------------------------------------------------- voice (voice.js exposes window.OnlyVibesVoice)
+const voice = window.OnlyVibesVoice || null;
+const voicebar = document.getElementById('voicebar');
+const voiceEnable = document.getElementById('voiceEnable');
+const voiceTalk = document.getElementById('voiceTalk');
+const micToggle = document.getElementById('micToggle');
+const speakerSel = document.getElementById('speakerSel');
+let lastVoiceId = null;
+
+function cfgLine(c) {
+  return '[mic: ' + (c.mic ?? '?') + ' · speaker: ' + (c.speaker ?? '?') + ' · this: ' + ROLE + ']';
+}
+function renderConfig(c) {
+  if (!c) return;
+  micToggle.textContent = 'mic: ' + (c.mic ?? '?') + (c.mic === ROLE ? ' (this)' : '');
+  speakerSel.value = c.speaker ?? 'browser';
+}
+async function postConfig(body) {
+  try {
+    const r = await fetch('/api/voice/config', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) return null;
+    const c = await r.json();
+    voice?.setConfig(c);
+    renderConfig(c);
+    return c;
+  } catch { return null; }
+}
+
+// show the voice UI only when the server actually has voice configured
+fetch('/api/voice/health').then((r) => (r.ok ? r.json() : null)).then((h) => {
+  if (h && h.voice && window.OnlyVibesVoice) {
+    voicebar.style.display = 'flex';
+    voice.setConfig(h.config);
+    renderConfig(h.config);
+  }
+}).catch(() => { /* standalone / fake-data mode: stay hidden */ });
+
+voiceEnable.onclick = async () => {
+  await voice?.enable();
+  voiceEnable.style.display = 'none';
+  voiceTalk.style.display = '';
+};
+voiceTalk.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  voiceTalk.setPointerCapture(e.pointerId);
+  voice?.begin();
+});
+voiceTalk.addEventListener('pointerup', () => voice?.end());
+voiceTalk.addEventListener('pointercancel', () => voice?.end());
+addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat) { e.preventDefault(); voice?.begin(); }
+});
+addEventListener('keyup', (e) => { if (e.code === 'Space') voice?.end(); });
+micToggle.onclick = () => { postConfig({ toggle: 'mic' }); };
+speakerSel.onchange = () => { postConfig({ speaker: speakerSel.value }); };
+
+// head-locked voice card — added to scene, NOT world (world is scaled 0.15 in AR)
+const VOICE_BG = {
+  ready: 'rgba(20,16,40,0.92)',
+  listening: 'rgba(48,22,66,0.94)',
+  thinking: 'rgba(56,40,10,0.94)',
+  speaking: 'rgba(12,38,26,0.94)',
+  error: 'rgba(64,16,16,0.94)',
+  off: 'rgba(20,16,40,0.92)',
+};
+const voiceCard = makeCard({ fontPx: 22, bg: VOICE_BG.ready, fg: '#ece6ff' });
+voiceCard.visible = false;
+scene.add(voiceCard);
+let lastVoiceText = '';
+let voiceHideTimer = null;
+
+function setVoiceText(t, state = 'ready', holdMs = 8000) {
+  lastVoiceText = t;
+  voiceCard.userData.bg = VOICE_BG[state] || VOICE_BG.ready;
+  setCardText(voiceCard, t); // re-reads userData.bg, resets scale
+  if (renderer.xr.isPresenting) voiceCard.scale.multiplyScalar(0.25);
+  voiceCard.visible = true;
+  if (voiceHideTimer) clearTimeout(voiceHideTimer);
+  voiceHideTimer = setTimeout(() => { voiceCard.visible = false; }, holdMs);
+}
+
+const VOICE_HEAD = {
+  ready: '🎙 ready', listening: '🎙 listening…', thinking: '🤔 thinking…',
+  speaking: '🔊 speaking…', error: '⚠ voice error', off: 'voice off',
+};
+voice?.init({
+  role: ROLE,
+  clientId: CLIENT_ID,
+  onUpdate: (u) => {
+    const c = u.config || {};
+    const state = u.state || 'ready';
+    const lines = [cfgLine(c), VOICE_HEAD[state] || state];
+    if (u.heard) lines.push('you: ' + u.heard);
+    if (u.reply) lines.push('→ ' + u.reply);
+    setVoiceText(lines.join('\n'), state);
+    const listening = state === 'listening';
+    voiceTalk.textContent = listening ? 'Release to send' : 'Hold to talk';
+    voiceTalk.classList.toggle('holding', listening);
+  },
+  onBlocked: (why) => { setVoiceText('voice blocked: ' + why, 'error'); },
+});
+
 // ---------------------------------------------------------------- live data (WS /view) + fake fallback
 const statusEl = document.getElementById('status');
 let gotReal = false;
@@ -240,7 +376,25 @@ function connect() {
   ws.onmessage = (ev) => {
     gotReal = true;
     statusEl.textContent = 'live';
-    try { applyState(JSON.parse(ev.data)); } catch { /* ignore bad frame */ }
+    let snap;
+    try { snap = JSON.parse(ev.data); } catch { return; /* ignore bad frame */ }
+    applyState(snap);
+    if (snap.voice_config) {
+      voice?.setConfig(snap.voice_config);
+      renderConfig(snap.voice_config);
+    }
+    if (snap.voice && snap.voice.id !== lastVoiceId) {
+      const first = lastVoiceId === null;
+      lastVoiceId = snap.voice.id;
+      if (!first && snap.voice.client_id !== CLIENT_ID) {
+        setVoiceText([cfgLine(snap.voice_config || {}),
+          'you: ' + (snap.voice.heard || ''),
+          '→ ' + (snap.voice.reply || '')].join('\n'));
+        if (snap.voice.source_role !== ROLE && (snap.voice.speak_on || []).includes(ROLE)) {
+          voice?.speak(snap.voice.reply);
+        }
+      }
+    }
   };
   ws.onclose = () => { if (!gotReal) statusEl.textContent = 'no server — fake data'; setTimeout(connect, 2000); };
   ws.onerror = () => { if (!gotReal) statusEl.textContent = 'no server — fake data'; };
@@ -280,20 +434,59 @@ document.body.appendChild(arButton);
 renderer.xr.addEventListener('sessionstart', () => {
   world.scale.setScalar(0.15);
   world.position.set(0, -0.3, -0.8);
+  const session = renderer.xr.getSession();
+  if (PTT === 'trigger' && session) {
+    session.addEventListener('selectstart', () => voice?.begin());
+    session.addEventListener('selectend', () => voice?.end());
+  }
+  voice?.log({ ev: 'xr-start', role: ROLE, clientId: CLIENT_ID });
+  if (voiceCard.visible) setVoiceText(lastVoiceText); // rescale for AR
 });
 renderer.xr.addEventListener('sessionend', () => {
   world.scale.setScalar(1);
   world.position.set(0, 0, 0);
+  if (voiceCard.visible) setVoiceText(lastVoiceText); // rescale for desktop
 });
 
 // ---------------------------------------------------------------- loop / resize
 const clock = new THREE.Clock();
 const _camQ = new THREE.Quaternion(), _parentQ = new THREE.Quaternion();
+const _camP = new THREE.Vector3(), _fwd = new THREE.Vector3();
+let pttDown = false, switchSince = 0, switchFired = false;
 renderer.setAnimationLoop(() => {
   const t = clock.getElapsedTime();
   // active camera: XR headset camera while presenting, desktop camera otherwise
   const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   cam.getWorldQuaternion(_camQ);
+  // head-locked voice card follows the camera
+  if (voiceCard.visible) {
+    cam.getWorldPosition(_camP);
+    _fwd.set(0, -0.25, -1).normalize().applyQuaternion(_camQ);
+    voiceCard.position.copy(_camP).addScaledVector(_fwd, renderer.xr.isPresenting ? 0.7 : 2.2);
+    voiceCard.quaternion.copy(_camQ);
+  }
+  // controller PTT (A/X button) + mic toggle (B/Y held >1s)
+  const xrSession = renderer.xr.getSession();
+  if (xrSession) {
+    let pttPressed = false, switchPressed = false;
+    for (const src of xrSession.inputSources) {
+      const gp = src.gamepad;
+      if (!gp) continue;
+      if (PTT !== 'trigger' && gp.buttons[+PTT]?.pressed) pttPressed = true;
+      if (gp.buttons[SWITCH]?.pressed) switchPressed = true;
+    }
+    if (pttPressed && !pttDown) voice?.begin();
+    if (!pttPressed && pttDown) voice?.end();
+    pttDown = pttPressed;
+    if (switchPressed) {
+      const now = performance.now();
+      if (!switchSince) { switchSince = now; switchFired = false; }
+      else if (!switchFired && now - switchSince > 1000) {
+        switchFired = true;
+        postConfig({ toggle: 'mic' }).then((c) => { if (c) setVoiceText('mic → ' + c.mic); });
+      }
+    } else { switchSince = 0; switchFired = false; }
+  } else { pttDown = false; switchSince = 0; switchFired = false; }
   for (const g of laptopGroups.values()) {
     g.updateWorldMatrix(true, false);
     g.getWorldQuaternion(_parentQ).invert();

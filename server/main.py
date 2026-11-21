@@ -4,9 +4,19 @@ OnlyVibes server.
 
 Endpoints:
     WS   /ws         <- reporters stream laptop status messages (shared/schema.json)
-    WS   /view       -> viewers (web/index.html) get a broadcast of all laptop states, 2x/s
+    WS   /view       -> viewers (web/index.html) get a broadcast of all laptop states, 2x/s,
+                        now also carrying "voice" (last turn) and "voice_config"
     GET  /api/state  -> same snapshot as JSON (debugging)
     POST /summarize  -> {"last_log": "..."} -> {"summary": "..."} via Mistral Small
+    POST /api/voice/log     -> browser voice debug log (printed server-side)
+    POST /api/voice/token   -> mint a short-lived rt_* realtime token (key stays server-side)
+    POST /api/voice/chat    -> SSE proxy to /chat/completions, grounded on the live snapshot
+    POST /api/voice/turn    -> store the latest voice turn (heard + reply) for /view clients
+    GET|POST /api/voice/config -> read / change mic + speaker roles (in-memory)
+    GET  /api/voice/health  -> voice availability + current config
+    GET  /voice.js          -> serves ../web/voice.js (browser voice module)
+    GET  /mic               -> serves ../web/mic.html (fallback mic page, role=web)
+    GET  /probe             -> serves ../web/probe.html (capability probe)
     GET  /           -> serves ../web/index.html (Three.js / WebXR viewer)
 
 How summaries work (rate-limit safe):
@@ -36,6 +46,10 @@ Env vars:
     STALE_AFTER      seconds without updates before a laptop is dropped (default 5)
     SUMMARY_EVERY    min seconds between Mistral calls per agent (default 5)
     STUCK_AFTER      seconds of continuous errors before an agent is "stuck" (default 45)
+    MISTRAL_API_BASE base URL for Mistral API calls (default https://api.mistral.ai/v1)
+    VOICE_CHAT_MODEL model used by /api/voice/chat (default MISTRAL_MODEL)
+    VOICE_MIC        which role may take the mic: browser|web (default browser)
+    VOICE_SPEAKER    where replies are spoken: mic|all|browser|web (default browser)
 
 Run:
     cd server
@@ -53,8 +67,8 @@ import time
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
@@ -76,6 +90,18 @@ EDIT_RE = re.compile(r"\b(edit|edited|editing|write|wrote|writing|patch|patched|
 FILE_RE = re.compile(r"[\w./-]*[\w-]+\.(?:py|js|ts|tsx|jsx|html|css|json|toml|md|go|rs|java|c|cpp|h|yml|yaml|sh)\b")
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+# voice (Voxtral realtime STT/TTS + grounded chat); the API key never leaves the server
+MISTRAL_API_BASE = os.environ.get("MISTRAL_API_BASE", "https://api.mistral.ai/v1")
+VOICE_CHAT_MODEL = os.environ.get("VOICE_CHAT_MODEL", MISTRAL_MODEL)
+VOICE_MODELS = {"voxtral-mini-transcribe-realtime-3", "voxtral-mini-tts-3-0"}
+VOICE_ROLES = ["browser", "web"]
+SPEAKER_OPTIONS = {"mic", "all", "browser", "web"}
+
+
+def _env_choice(name: str, default: str, allowed) -> str:
+    v = os.environ.get(name, default)
+    return v if v in allowed else default
 
 
 @asynccontextmanager
@@ -103,6 +129,11 @@ mistral_sem = asyncio.Semaphore(MAX_CONCURRENT)
 error_since: dict[str, float] = {}                # agent key -> when its errors started
 recent_edits: dict[str, dict[str, float]] = {}    # agent key -> {file: last edit time}
 team_summary: str = ""
+
+# voice bookkeeping: latest turn (broadcast via /view) + shared mic/speaker config
+voice_turn: dict = {}
+voice_config = {"mic": _env_choice("VOICE_MIC", "browser", VOICE_ROLES),
+                "speaker": _env_choice("VOICE_SPEAKER", "browser", SPEAKER_OPTIONS), "rev": 0}
 
 
 def fallback(line: str) -> str:
@@ -310,6 +341,8 @@ def snapshot() -> dict:
         "team_summary": team_summary or count_line(laptops),
         "alerts": find_collisions(laptops, now),
         "laptops": laptops,
+        "voice": voice_turn,
+        "voice_config": voice_config,
     }
 
 
@@ -372,6 +405,142 @@ async def api_summarize(payload: dict) -> dict:
         return {"summary": await summarize(line)}
     except Exception:
         return {"summary": fallback(line)}
+
+
+@app.post("/api/voice/log")
+async def api_voice_log(payload: dict) -> dict:
+    print(f"[voice-log] {json.dumps(payload)[:2000]}")
+    return {"ok": True}
+
+
+@app.get("/probe")
+async def probe():
+    return FileResponse(WEB_DIR / "probe.html")
+
+
+@app.post("/api/voice/token")
+async def api_voice_token(payload: dict) -> JSONResponse:
+    """Mint a short-lived rt_* realtime token for one Voxtral model (browser-safe)."""
+    model = payload.get("model", "")
+    if model not in VOICE_MODELS:
+        return JSONResponse({"error": f"model not allowed: {model}"}, status_code=400)
+    if not MISTRAL_API_KEY:
+        return JSONResponse({"error": "MISTRAL_API_KEY not set"}, status_code=503)
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            f"{MISTRAL_API_BASE}/client/sessions",
+            headers={"Authorization": f"Bearer {MISTRAL_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={"purpose": "realtime", "model": model},
+        )
+    if r.status_code >= 300:
+        return JSONResponse({"error": r.text}, status_code=r.status_code)
+    data = r.json()
+    return JSONResponse({"token": data["client_secret"]["value"],
+                         "expires_at": data.get("expires_at"),
+                         "model": model})
+
+
+VOICE_SYSTEM = (
+    "You are OnlyVibes, a voice assistant inside an AR view of the team's AI coding agents. "
+    "Answer ONLY from the live data below; if it is not there, say you don't see it. "
+    "Reply in one to three short spoken sentences: no markdown, lists, emoji or code; "
+    "say file names naturally. Mention stuck agents and collisions first when asked how things are going.\n\n"
+    "LIVE DATA:\n"
+)
+
+
+def voice_context() -> str:
+    """Plain-text digest of the live snapshot, injected into every voice chat call."""
+    snap = snapshot()
+    lines = [f"Team headline: {snap['team_summary']}"]
+    lines += [f"ALERT: {a['text']}" for a in snap["alerts"]]
+    for st in snap["laptops"]:
+        agents = st.get("agents") or []
+        if not agents:
+            lines.append(f"{st.get('owner')} ({st.get('laptop')}): no agents running")
+        for a in agents:
+            proj = (a.get("cwd") or "").rstrip("/").rsplit("/", 1)[-1] or "?"
+            lines.append(f"{st.get('owner')} ({st.get('laptop')}): {a.get('name')} is {a.get('state')}, "
+                         f"{a.get('cpu')}% cpu, project {proj} - {a.get('summary') or a.get('last_log') or ''}")
+    return "\n".join(lines)[:4000]
+
+
+@app.post("/api/voice/chat")
+async def api_voice_chat(req: Request):
+    """SSE proxy for streaming chat completions, grounded on the live snapshot."""
+    if not MISTRAL_API_KEY:
+        return JSONResponse({"error": "MISTRAL_API_KEY not set"}, status_code=503)
+    body = await req.json()
+    history = [m for m in body.get("messages", []) if m.get("role") in ("user", "assistant")][-12:]
+    messages = [{"role": "system", "content": VOICE_SYSTEM + voice_context()}] + history
+
+    async def gen():
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream(
+                "POST", f"{MISTRAL_API_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": VOICE_CHAT_MODEL, "messages": messages,
+                      "stream": True, "temperature": 0.3},
+            ) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if line.startswith("data:"):
+                        yield f"{line}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.post("/api/voice/turn")
+async def api_voice_turn(payload: dict) -> dict:
+    global voice_turn
+    voice_turn = {"id": int(time.time() * 1000),
+                  "heard": str(payload.get("heard", ""))[:500],
+                  "reply": str(payload.get("reply", ""))[:1000],
+                  "source_role": payload.get("source_role") if payload.get("source_role") in VOICE_ROLES else "web",
+                  "client_id": str(payload.get("client_id", ""))[:64],
+                  "speak_on": [r for r in payload.get("speak_on", []) if r in VOICE_ROLES],
+                  "ts": time.time()}
+    return {"ok": True, "id": voice_turn["id"]}
+
+
+@app.get("/api/voice/config")
+async def api_voice_config_get() -> dict:
+    return voice_config
+
+
+@app.post("/api/voice/config")
+async def api_voice_config_set(payload: dict) -> JSONResponse:
+    mic, speaker = payload.get("mic"), payload.get("speaker")
+    if payload.get("toggle") == "mic":
+        mic = "web" if voice_config["mic"] == "browser" else "browser"
+    if mic is not None and mic not in VOICE_ROLES:
+        return JSONResponse({"error": f"mic must be one of {VOICE_ROLES}"}, status_code=400)
+    if speaker is not None and speaker not in SPEAKER_OPTIONS:
+        return JSONResponse({"error": f"speaker must be one of {sorted(SPEAKER_OPTIONS)}"}, status_code=400)
+    if mic:
+        voice_config["mic"] = mic
+    if speaker:
+        voice_config["speaker"] = speaker
+    voice_config["rev"] += 1
+    print(f"[voice] config -> {voice_config}")
+    return JSONResponse(voice_config)
+
+
+@app.get("/api/voice/health")
+async def api_voice_health() -> dict:
+    return {"ok": True, "voice": bool(MISTRAL_API_KEY), "config": voice_config}
+
+
+@app.get("/voice.js")
+async def voice_js():
+    return FileResponse(WEB_DIR / "voice.js", media_type="application/javascript")
+
+
+@app.get("/mic")
+async def mic_page():
+    return FileResponse(WEB_DIR / "mic.html")
 
 
 @app.get("/")
