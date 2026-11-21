@@ -136,7 +136,8 @@ let pendingSamples = 0;
 const FLUSH_SAMPLES = (TTS_RATE * 250) / 1000;  // 250ms
 
 function ensureAudio() {
-  if (!audioCtx) audioCtx = new AudioContext();
+  // create at the PCM rate so no resampling artifacts
+  if (!audioCtx) audioCtx = new AudioContext({ sampleRate: TTS_RATE });
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
 function decodePcm(b64) {
@@ -220,8 +221,11 @@ async function openTts() {
   });
   await opened;
   await waitEvent(ttsWs, "session.created");
+  // long_form = higher audio quality (responsive is tuned for latency and
+  // sounds artifact-y); override with ?mode=responsive
+  const mode = new URLSearchParams(location.search).get("mode") || "long_form";
   send(ttsWs, { type: "session.update", session: {
-    voice: "voice_592", response_format: "pcm", streaming_mode: "responsive" } });
+    voice: "voice_592", response_format: "pcm", streaming_mode: mode } });
   await waitEvent(ttsWs, "session.updated");
 }
 
