@@ -108,3 +108,11 @@ def test_redirect_other_agents_interrupt_only(monkeypatch):
 def test_resume_claude_rejects_bad_session_id(monkeypatch):
     monkeypatch.setattr(r.shutil, "which", lambda name: "/bin/claude")
     assert r._resume_claude({**CLAUDE, "log": "/x/../../etc.jsonl"}, "go", "c")["ok"] is False
+
+
+def test_redirect_refuses_when_log_may_be_another_conversation(monkeypatch):
+    monkeypatch.setattr(r, "_tmux_pane", lambda proc: None)
+    monkeypatch.setattr(r, "_mtime", lambda path: 100.0)  # log last written long before the process started
+    monkeypatch.setattr(r.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("must not interrupt")))
+    out = r.redirect_agent({**CLAUDE, "ctime": 1000.0}, "go", "c", FakeProc())
+    assert out["ok"] is False and "not interrupting" in out["message"]

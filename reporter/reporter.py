@@ -425,7 +425,9 @@ def claude_sessions(procs: list[dict], now: float) -> list[dict]:
         path = _CLAUDE_PID_LOG.get((r["pid"], r["ctime"]))
         if not path or path in used or not os.path.exists(path):
             path = pick_claude_log(r, used)
-            if path:
+            # only pin the process to its OWN log (created after it started); a fallback guess (its log
+            # doesn't exist yet: no prompt sent) is re-evaluated next tick
+            if path and _birth(path) >= r["ctime"] - 5:
                 _CLAUDE_PID_LOG[(r["pid"], r["ctime"])] = path
         log = None
         if path:
@@ -962,6 +964,9 @@ def redirect_agent(info: dict, text: str, agent: str, proc) -> dict:
     if proc is None:
         return _resume_claude(info, text, agent)
     pane = _tmux_pane(proc)
+    if not pane and info.get("ctime") and _mtime(info["log"]) < info["ctime"] - 5:
+        # the log hasn't been written since this process started: it may be another conversation
+        return {"ok": False, "message": "can't tell which conversation that terminal is in yet; not interrupting"}
     if pane:
         tmux = shutil.which("tmux")
         subprocess.run([tmux, "send-keys", "-t", pane, "Escape"], timeout=3)
