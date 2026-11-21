@@ -787,6 +787,7 @@ class Hub:
                     continue
                 agents.append({
                     "name": (task["assignee"] or {}).get("agent") or "",
+                    "kind": "task", "task_id": tid,  # lets the AR view stop/retry/message it
                     "pid": 0, "cpu": 0, "cwd": "",
                     "last_log": task["last_event"],
                     "summary": f"{task['key']} · {task['title']} — {task['progress']}%",

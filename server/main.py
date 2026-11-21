@@ -80,7 +80,7 @@ import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -139,6 +139,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.hub = hub
     app.state.settings = settings
 
+    def require_control_key(request: Request) -> None:
+        """When OV_CONTROL_SECRET is set, control endpoints require ?key=<secret>
+        or the X-OV-Key header; otherwise 403. Viewing endpoints stay open."""
+        secret = settings.control_secret
+        if not secret:
+            return
+        key = request.query_params.get("key") or request.headers.get("x-ov-key") or ""
+        if key != secret:
+            raise StarletteHTTPException(
+                status_code=403,
+                detail="control locked: pass ?key=<OV_CONTROL_SECRET> or header X-OV-Key",
+            )
+
     # ------------------------------------------------------------------ errors
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
@@ -186,12 +199,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with hub.lock:
             return hub.task_view(task_id)
 
-    @app.post("/api/tasks/{task_id}/retry")
+    @app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(require_control_key)])
     async def retry_task(task_id: str) -> dict:
         async with hub.lock:
             return hub.human_retry(task_id)
 
-    @app.post("/api/tasks/{task_id}/cancel")
+    @app.post("/api/tasks/{task_id}/cancel", dependencies=[Depends(require_control_key)])
     async def cancel_task(task_id: str) -> dict:
         async with hub.lock:
             return hub.human_cancel(task_id)
@@ -333,11 +346,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary_cache[key] = (log, s)
         return s
 
+    # laptop key (tailscale_ip, else hostname) -> that laptop's reporter socket, so the AR view
+    # can send it whitelisted control requests (POST /api/control); request id -> answer future
+    reporter_socks: dict[str, WebSocket] = {}
+    control_waiters: dict[str, asyncio.Future] = {}
+
     @app.websocket("/ws")
     async def ws_reporter(websocket: WebSocket) -> None:
         """Receive status messages from reporters (schema: shared/schema.json)."""
         await websocket.accept()
         print(f"[server] reporter connected: {websocket.client}")
+        my_keys: set[str] = set()
         try:
             while True:
                 raw = await websocket.receive_text()
@@ -347,10 +366,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     continue
                 if not isinstance(data, dict):
                     continue
+                if data.get("type") == "control_result":
+                    fut = control_waiters.get(str(data.get("id") or ""))
+                    if fut is not None and not fut.done():
+                        fut.set_result({"ok": bool(data.get("ok")), "message": str(data.get("message") or "")[:300]})
+                    continue
                 data.setdefault("ts", time.time())
                 ikey = (data.get("tailscale_ip") or "").strip()
                 if not ikey or ikey == "127.0.0.1":
                     ikey = data.get("laptop") or "unknown"
+                for k in (ikey, str(data.get("laptop") or "")):
+                    if k:
+                        reporter_socks[k] = websocket
+                        my_keys.add(k)
                 # fill in summaries for agents that arrived without one
                 todo = [a for a in data.get("agents", []) if not a.get("summary") and a.get("last_log")]
                 if todo:
@@ -361,6 +389,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     hub.legacy.ingest(data)
         except WebSocketDisconnect:
             print(f"[server] reporter disconnected: {websocket.client}")
+        finally:
+            for k in my_keys:
+                if reporter_socks.get(k) is websocket:
+                    del reporter_socks[k]
+
+    @app.post("/api/control", dependencies=[Depends(require_control_key)])
+    async def api_control(request: Request):
+        """AR view -> stop / resume / say for one agent card.
+
+        Orchestra task cards (task_id): stop = cancel, resume = retry, say = message to that
+        task's agent inbox. Reporter cards: forwarded to that laptop's reporter, which resolves
+        the card name locally and runs only its fixed whitelist.
+        """
+        body = await _json_body(request)
+        action = str(body.get("action") or "")
+        if action not in ("stop", "resume", "say"):
+            return _error(400, "bad_request", "action must be stop, resume or say")
+        text = " ".join(str(body.get("text") or "").split())[:500]
+        task_id = str(body.get("task_id") or "")
+        if task_id:
+            async with hub.lock:
+                task = hub.task_view(task_id)["task"]
+                if action == "stop":
+                    hub.human_cancel(task_id)
+                    return {"ok": True, "message": f"cancelled {task['key']}"}
+                if action == "resume":
+                    hub.human_retry(task_id)
+                    return {"ok": True, "message": f"requeued {task['key']}"}
+                if not text:
+                    return _error(400, "bad_request", "text is required")
+                hub.human_message({"project_id": task["project_id"], "to": task_id, "text": text, "name": "AR"})
+                return {"ok": True, "message": f"sent to {task['key']}"}
+        laptop, agent = str(body.get("laptop") or ""), str(body.get("agent") or "")
+        sock = reporter_socks.get(laptop)
+        if sock is None or not agent:
+            return _error(404, "not_found", "that laptop's reporter is not connected")
+        rid = secrets.token_hex(6)
+        fut = asyncio.get_running_loop().create_future()
+        control_waiters[rid] = fut
+        try:
+            await sock.send_text(json.dumps({"type": "control", "id": rid, "agent": agent,
+                                             "action": action, "text": text}))
+            return await asyncio.wait_for(fut, timeout=5.0)
+        except asyncio.TimeoutError:
+            return _error(504, "timeout", "no answer from that laptop: its reporter may be an older "
+                                          "version (pull and restart it)")
+        except Exception:
+            return _error(502, "unreachable", "could not reach that laptop's reporter")
+        finally:
+            control_waiters.pop(rid, None)
 
     @app.websocket("/view")
     async def ws_view(websocket: WebSocket) -> None:
