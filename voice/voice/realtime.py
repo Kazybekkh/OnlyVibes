@@ -26,10 +26,11 @@ STT_RT_MODEL = os.environ.get("VOXTRAL_STT_RT_MODEL",
                               "voxtral-mini-transcribe-realtime-3")
 
 MIC_RATE = int(os.environ.get("VOICE_SAMPLE_RATE", "16000"))
-# Realtime TTS `pcm` output is 48 kHz mono int16 (verified: exactly 2x the
-# samples of the offline 24 kHz WAV for the same text). The offline endpoint
-# returns 24 kHz WAV/MP3 instead.
-TTS_RATE = int(os.environ.get("VOXTRAL_TTS_PCM_RATE", "48000"))
+# Voxtral TTS `pcm` output is raw float32 little-endian, 24 kHz mono
+# (docs.mistral.ai audio formats). Reading it as int16 at 48 kHz has the same
+# duration but turns every sample into noise.
+TTS_RATE = int(os.environ.get("VOXTRAL_TTS_PCM_RATE", "24000"))
+TTS_DTYPE = "<f4"
 CHUNK_MS = 100
 
 
@@ -264,43 +265,80 @@ async def streaming_chat_deltas(prompt: str, model: str = CHAT_MODEL,
 # --------------------------------------------------------------------------
 
 class StreamingPlayer:
-    """Plays realtime-TTS PCM chunks (48 kHz mono int16) gaplessly."""
+    """Plays realtime-TTS PCM chunks (24 kHz mono float32) gaplessly.
 
-    def __init__(self, sample_rate: int = TTS_RATE):
+    Chunks go into one contiguous buffer (no reordering, partial samples are
+    carried over). Playback prebuffers ~120 ms, rebuffers on underrun instead
+    of stuttering, and ramps in/out so starts and underruns don't click.
+    """
+
+    def __init__(self, sample_rate: int = TTS_RATE, prebuffer_ms: int = 120,
+                 fade_samples: int = 96):
+        import threading
         self.sample_rate = sample_rate
-        self._q: queue.Queue = queue.Queue()
+        self.prebuffer = sample_rate * prebuffer_ms // 1000
+        self.fade = fade_samples
+        self._lock = threading.Lock()
+        self._buf = bytearray()
         self._stream = None
+        self._playing = False
+        self._ended = False
+        self._gain = 0.0
+        self._last = 0.0
 
     def start(self) -> None:
-        import numpy as np  # noqa: F401  (needed by callback)
         import sounddevice as sd
+        with self._lock:
+            self._buf.clear()
+            self._playing = self._ended = False
+            self._gain = self._last = 0.0
         self._stream = sd.OutputStream(samplerate=self.sample_rate, channels=1,
-                                       dtype="int16", callback=self._callback)
+                                       dtype="float32", latency="low",
+                                       callback=self._callback)
         self._stream.start()
 
     def _callback(self, outdata, frames, t, status):
         import numpy as np
-        got = 0
-        while got < frames:
-            try:
-                pcm = self._q.get_nowait()
-            except queue.Empty:
-                break
-            arr = np.frombuffer(pcm, dtype="int16")
-            n = min(len(arr), frames - got)
-            outdata[got:got + n, 0] = arr[:n]
-            got += n
-            if n < len(arr):
-                self._q.put(arr[n:].tobytes())
-        if got < frames:
-            outdata[got:, 0] = 0
+        out = outdata[:, 0]
+        with self._lock:
+            avail = len(self._buf) // 4
+            if not self._playing and avail and (avail >= self.prebuffer or self._ended):
+                self._playing = True
+            n = min(frames, avail) if self._playing else 0
+            if n:
+                data = np.frombuffer(bytes(self._buf[:n * 4]), dtype=TTS_DTYPE)
+                del self._buf[:n * 4]
+            if self._playing and n < frames:
+                self._playing = False  # underrun -> rebuffer
+        if n:
+            ramp = np.minimum(1.0, self._gain + np.arange(1, n + 1) / self.fade)
+            out[:n] = data * ramp
+            self._gain = float(ramp[-1])
+            if n < frames:  # ran dry mid-block: fade the tail out
+                k = min(self.fade, n)
+                out[n - k:n] *= np.linspace(1.0, 0.0, k, dtype="float32")
+                self._gain = 0.0
+            self._last = float(out[n - 1])
+        if n < frames:
+            tail = self._last * 0.98 ** np.arange(1, frames - n + 1)
+            out[n:] = tail
+            self._last = float(tail[-1]) if len(tail) else self._last
+            self._gain = 0.0
 
     def write(self, pcm: bytes) -> None:
-        self._q.put(pcm)
+        with self._lock:
+            self._buf += pcm
 
     def finish(self) -> None:
-        while not self._q.empty():
+        with self._lock:
+            self._ended = True
+            self._buf = self._buf[:len(self._buf) // 4 * 4]  # drop partial sample
+        while True:
+            with self._lock:
+                if not self._buf:
+                    break
             time.sleep(0.01)
+        time.sleep(0.05)  # let the last block + fade reach the speaker
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()

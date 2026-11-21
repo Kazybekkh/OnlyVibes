@@ -36,7 +36,7 @@
 "use strict";
 const STT_MODEL = "voxtral-mini-transcribe-realtime-3";
 const TTS_MODEL = "voxtral-mini-tts-3-0";
-const TTS_RATE = 48000;   // realtime pcm is 48kHz mono int16
+const TTS_RATE = 24000;   // Voxtral pcm = float32 LE, 24 kHz mono (NOT int16)
 const MIC_RATE = 16000;
 const WS_BASE = "wss://api.mistral.ai/v1";
 const MAX_TURN_MS = 30000;
@@ -49,9 +49,10 @@ const timingsEl = document.getElementById("timings");
 
 let micCtx = null, micStream = null, workletNode = null;
 let sttWs = null, ttsWs = null;
-let audioCtx = null, nextPlayTime = 0;
-let holding = false, turnActive = false, t0 = 0, firstAudio = 0, audioChunks = 0;
-let endTimer = null, doneFallback = null;
+let audioCtx = null, playerNode = null, pcmCarry = new Uint8Array(0);
+let holding = false, turnActive = false, t0 = 0, firstAudio = 0;
+let endTimer = null, doneFallback = null, chatAbort = null;
+let speaking = false, genPending = false, dropGenerations = 0;
 const history = [];
 
 const status = (s) => { statusEl.textContent = s; };
@@ -128,49 +129,78 @@ async function startMic() {
   src.connect(workletNode).connect(micCtx.destination);
 }
 
-// ---------- audio out: create/resume inside the user gesture ----------
-// Chunks are aggregated into ~250ms buffers before scheduling: raw per-chunk
-// scheduling causes audible clicks/robotic noise at chunk boundaries.
-let pendingPcm = [];   // array of Float32Array
-let pendingSamples = 0;
-const FLUSH_SAMPLES = (TTS_RATE * 250) / 1000;  // 250ms
+// ---------- audio out: gapless AudioWorklet player ----------
+// The context runs at the TTS rate, so chunks are played sample-exact with
+// no per-chunk scheduling (no seams/clicks). The player prebuffers ~120ms,
+// rebuffers on underrun instead of stuttering, and ramps in/out so starts,
+// stops and underruns never produce a click.
+const PLAYER_JS = `
+class Player extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.q = []; this.cur = null; this.pos = 0; this.buffered = 0;
+    this.playing = false; this.ended = false; this.gain = 0; this.last = 0;
+    this.prebuf = Math.round(sampleRate * 0.12);
+    this.port.onmessage = ({ data: m }) => {
+      if (m.type === "pcm") { this.q.push(m.data); this.buffered += m.data.length; }
+      else if (m.type === "end") this.ended = true;
+      else if (m.type === "reset") { this.q = []; this.cur = null; this.buffered = 0;
+                                     this.playing = false; this.ended = false; }
+    };
+  }
+  process(_, outputs) {
+    const out = outputs[0][0];
+    if (!this.playing && this.buffered > 0 && (this.buffered >= this.prebuf || this.ended))
+      this.playing = true;
+    for (let i = 0; i < out.length; i++) {
+      if (this.playing && (!this.cur || this.pos >= this.cur.length)) {
+        this.cur = this.q.shift() || null; this.pos = 0;
+        if (!this.cur) this.playing = false;        // underrun -> rebuffer
+      }
+      if (this.playing) {
+        this.gain = Math.min(1, this.gain + 1 / 96);   // ~4ms fade-in
+        this.last = this.cur[this.pos++] * this.gain; this.buffered--;
+      } else {
+        this.gain = 0; this.last *= 0.98;              // decay to 0, no click
+      }
+      out[i] = this.last;
+    }
+    if (this.ended && !this.playing && this.buffered <= 0) {
+      this.ended = false; this.port.postMessage("drained");
+    }
+    return true;
+  }
+}
+registerProcessor("player", Player);`;
 
-function ensureAudio() {
-  // create at the PCM rate so no resampling artifacts
-  if (!audioCtx) audioCtx = new AudioContext({ sampleRate: TTS_RATE });
-  if (audioCtx.state === "suspended") audioCtx.resume();
+async function initAudioOut() {
+  audioCtx = new AudioContext({ sampleRate: TTS_RATE, latencyHint: "interactive" });
+  await audioCtx.audioWorklet.addModule(
+    URL.createObjectURL(new Blob([PLAYER_JS], { type: "application/javascript" })));
+  playerNode = new AudioWorkletNode(audioCtx, "player", { outputChannelCount: [1] });
+  playerNode.port.onmessage = (e) => { if (e.data === "drained") onPlaybackDrained(); };
+  playerNode.connect(audioCtx.destination);
+}
+function ensureAudio() {   // must be called inside a user gesture
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
 }
 function decodePcm(b64) {
+  // float32 LE; carry any partial sample over to the next chunk
   const bin = atob(b64);
-  const n = bin.length >> 1;
-  // copyToChannel requires Float32Array (Int16Array throws TypeError in Chrome)
-  const floats = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
-    floats[i] = (v << 16 >> 16) / 32768;   // signed int16 LE -> float [-1,1]
-  }
-  return floats;
-}
-function flushPcm() {
-  if (!pendingSamples) return;
-  ensureAudio();
-  const all = new Float32Array(pendingSamples);
-  let off = 0;
-  for (const f of pendingPcm) { all.set(f, off); off += f.length; }
-  pendingPcm = []; pendingSamples = 0;
-  const buf = audioCtx.createBuffer(1, all.length, TTS_RATE);
-  buf.copyToChannel(all, 0);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf; src.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  nextPlayTime = Math.max(nextPlayTime, now);
-  src.start(nextPlayTime);
-  nextPlayTime += buf.duration;
+  const bytes = new Uint8Array(pcmCarry.length + bin.length);
+  bytes.set(pcmCarry);
+  for (let i = 0; i < bin.length; i++) bytes[pcmCarry.length + i] = bin.charCodeAt(i);
+  const n = bytes.length >> 2;
+  pcmCarry = bytes.slice(n * 4);
+  return new Float32Array(bytes.buffer, 0, n).slice();
 }
 function playPcm(b64) {
   const f = decodePcm(b64);
-  pendingPcm.push(f); pendingSamples += f.length;
-  if (pendingSamples >= FLUSH_SAMPLES) flushPcm();
+  if (f.length) playerNode.port.postMessage({ type: "pcm", data: f }, [f.buffer]);
+}
+function resetPlayback() {
+  pcmCarry = new Uint8Array(0);
+  if (playerNode) playerNode.port.postMessage({ type: "reset" });
 }
 
 // ---------- STT: one fresh session per turn (it ends at transcription.done) ----------
@@ -204,87 +234,116 @@ async function openTts() {
   ttsWs = new WebSocket(`${WS_BASE}/audio/speech/realtime?model=${TTS_MODEL}`,
                         ["realtime", token]);
   const opened = new Promise((res, rej) => { ttsWs.onopen = res; ttsWs.onerror = rej; });
+  dropGenerations = 0; genPending = false;
   attach(ttsWs, (msg) => {
     if (msg.type === "speech.audio.delta") {
-      audioChunks++;
+      if (dropGenerations) return;                 // interrupted reply: discard
       if (!firstAudio) { firstAudio = performance.now();
-        timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s | ctx=${audioCtx ? audioCtx.state : "?"} | out=${audioCtx ? audioCtx.destination.channelCount : "?"}ch`; }
+        timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s`; }
       try { playPcm(msg.audio_data); }
       catch (e) { status("audio playback error: " + e.message); console.error(e); }
     } else if (msg.type === "speech.audio.done") {
-      flushPcm();  // play any remaining tail
-      const drainMs = Math.max(0, (nextPlayTime - audioCtx.currentTime) * 1000);
-      setTimeout(endTurn, drainMs + 150);
+      if (dropGenerations) { dropGenerations--; return; }
+      genPending = false;
+      pcmCarry = new Uint8Array(0);
+      playerNode.port.postMessage({ type: "end" });   // -> "drained" -> endTurn
     } else if (msg.type === "error") {
       status("TTS error: " + JSON.stringify(msg.error)); endTurn();
     }
   });
+  ttsWs.onclose = () => { ttsWs = null; };
   await opened;
   await waitEvent(ttsWs, "session.created");
-  // long_form = higher audio quality (responsive is tuned for latency and
-  // sounds artifact-y); override with ?mode=responsive
-  const mode = new URLSearchParams(location.search).get("mode") || "long_form";
+  // responsive = lowest latency; ?mode=long_form for long passages
+  const mode = new URLSearchParams(location.search).get("mode") || "responsive";
+  const voice = new URLSearchParams(location.search).get("voice") || "voice_592";
   send(ttsWs, { type: "session.update", session: {
-    voice: "voice_592", response_format: "pcm", streaming_mode: mode } });
+    voice, response_format: "pcm", streaming_mode: mode } });
   await waitEvent(ttsWs, "session.updated");
+}
+
+function onPlaybackDrained() {
+  if (!speaking) return;
+  timingsEl.textContent += ` | total ${((performance.now() - t0)/1000).toFixed(2)}s`;
+  endTurn();
 }
 
 // ---------- chat (SSE via our server) -> straight into TTS ----------
 async function runReply(userText) {
   history.push({ role: "user", content: userText });
   replyEl.textContent = "";
-  status("thinking + speaking…");
+  status("thinking + speaking… (press again to interrupt)");
+  speaking = true;
+  pad.textContent = "Interrupt";
   if (micCtx) micCtx.suspend();   // don't let the mic hear our own reply
-  await openTts();
-  const r = await fetch("/api/chat", { method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({ messages: [
-      { role: "system", content: "You are a helpful voice assistant. Keep replies short and conversational." },
-      ...history.slice(-20)] }) });
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buffer = "", full = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) >= 0) {
-      const line = buffer.slice(0, idx).trim(); buffer = buffer.slice(idx + 2);
-      if (!line.startsWith("data:")) continue;
-      const d = line.slice(5).trim();
-      if (d === "[DONE]") continue;
-      try {
-        const obj = JSON.parse(d);
-        const delta = obj.choices?.[0]?.delta?.content;
-        if (delta) {
-          full += delta;
-          replyEl.textContent = full;
-          send(ttsWs, { type: "input_text.append", text: delta });
-        }
-      } catch {}
+  let full = "";
+  const ac = chatAbort = new AbortController();
+  try {
+    await openTts();
+    resetPlayback();
+    const r = await fetch("/api/chat", { method: "POST", signal: ac.signal,
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ messages: [
+        { role: "system", content: "You are a helpful voice assistant. Keep replies short and conversational. Reply in plain spoken sentences: no markdown, lists, emojis or code." },
+        ...history.slice(-20)] }) });
+    if (!r.ok) throw new Error("chat failed: " + r.status);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        const line = buffer.slice(0, idx).trim(); buffer = buffer.slice(idx + 2);
+        if (!line.startsWith("data:")) continue;
+        const d = line.slice(5).trim();
+        if (d === "[DONE]") continue;
+        try {
+          const delta = JSON.parse(d).choices?.[0]?.delta?.content;
+          if (delta && !ac.signal.aborted) {
+            full += delta;
+            replyEl.textContent = full;
+            genPending = true;
+            send(ttsWs, { type: "input_text.append", text: delta.replace(/[*_#`~>|]/g, "") });
+          }
+        } catch {}
+      }
     }
+  } catch (e) {
+    if (e.name !== "AbortError") { status("reply error: " + e.message); }
+  } finally {
+    if (chatAbort === ac) chatAbort = null;
+    if (full) send(ttsWs, { type: "input_text.flush" });   // always close the generation
   }
-  send(ttsWs, { type: "input_text.flush" });
   history.push({ role: "assistant", content: full });
-  timingsEl.textContent += ` | total ${((performance.now() - t0)/1000).toFixed(2)}s`;
+  if (!full || !ttsWs) { if (speaking) endTurn(); }
 }
 
 // ---------- turn control ----------
 function endTurn() {
-  holding = false; turnActive = false;
+  holding = false; turnActive = false; speaking = false;
   if (endTimer) { clearTimeout(endTimer); endTimer = null; }
   if (micCtx && micCtx.state === "suspended") micCtx.resume();
-  flushPcm();
   pad.classList.remove("holding");
   pad.textContent = "Hold to talk";
   status("ready — hold the button (or SPACE) to talk");
 }
 
+function interrupt() {
+  // barge-in: stop the current reply and discard its remaining audio
+  if (chatAbort) chatAbort.abort();
+  if (genPending) { dropGenerations++; genPending = false; }
+  resetPlayback();
+  endTurn();
+}
+
 async function beginTurn() {
+  if (speaking) interrupt();
   if (turnActive) return;
-  ensureAudio();                      // AudioContext must start inside the gesture
-  turnActive = true; holding = true; firstAudio = 0; audioChunks = 0; t0 = performance.now();
+  ensureAudio();                      // AudioContext must resume inside the gesture
+  turnActive = true; holding = true; firstAudio = 0; t0 = performance.now();
   transcriptEl.textContent = ""; replyEl.textContent = ""; timingsEl.textContent = "";
   pad.classList.add("holding"); pad.textContent = "Listening…";
   status("transcribing live…");
@@ -294,13 +353,13 @@ async function beginTurn() {
 }
 
 function stopListening() {
-  if (!turnActive) return;
+  if (!turnActive || speaking || !holding) return;
   holding = false;                    // stop streaming mic chunks
   send(sttWs, { type: "input_audio.end" });
   status("processing…");
   // fallback: if transcription.done never arrives, reset anyway
   if (doneFallback) clearTimeout(doneFallback);
-  doneFallback = setTimeout(endTurn, 5000);
+  doneFallback = setTimeout(() => { if (!speaking) endTurn(); }, 5000);
 }
 
 pad.addEventListener("pointerdown", (e) => { e.preventDefault(); pad.setPointerCapture(e.pointerId); beginTurn(); });
@@ -311,11 +370,12 @@ window.addEventListener("keyup", (e) => { if (e.code === "Space") stopListening(
 
 (async () => {
   try {
+    await initAudioOut();
     await startMic();
     pad.disabled = false;
     status("ready — hold the button (or SPACE) to talk");
   } catch (e) {
-    status("mic error: " + e.message + " (allow microphone in the browser prompt)");
+    status("audio init error: " + e.message + " (allow microphone in the browser prompt)");
   }
 })();
 </script>

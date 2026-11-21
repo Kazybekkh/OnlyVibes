@@ -90,7 +90,9 @@ leaves the server: `/api/token` mints short-lived `rt_*` tokens
 (`POST /v1/client/sessions`), the browser opens the Voxtral realtime
 STT/TTS websockets directly with `Sec-WebSocket-Protocol: ["realtime", token]`,
 and `/api/chat` is an SSE proxy for the streaming LLM. Live transcript deltas
-and streamed reply audio (48 kHz PCM via Web Audio) included.
+and streamed reply audio (24 kHz float32 PCM via a gapless AudioWorklet
+player) included. Press again while it speaks to interrupt. Query params:
+`?voice=<id>`, `?mode=long_form` (default `responsive`).
 
 ## Near-real-time mode (`--realtime`)
 
@@ -116,9 +118,9 @@ print(agent.last_timings)                # transcript/first-audio/total seconds
 Latency knobs: `StreamingRecorder(silence_timeout=0.8, energy_threshold=...)`,
 `SdkRealtimeSTT(target_streaming_delay_ms=480)` (lower = snappier transcript,
 less accurate), `SdkRealtimeTTS` uses `streaming_mode="responsive"` +
-`response_format="pcm"` — realtime PCM is **48 kHz** mono int16 (the offline
-endpoint returns 24 kHz WAV/MP3; playing realtime PCM at 24 kHz is what caused
-slowed/garbled audio). Override with `VOXTRAL_TTS_PCM_RATE` if Mistral changes it.
+`response_format="pcm"` — Voxtral PCM is raw **float32 little-endian, 24 kHz**
+mono (decoding it as int16 at 48 kHz has the same duration but is pure noise).
+Override the rate with `VOXTRAL_TTS_PCM_RATE` if Mistral changes it.
 
 ## The plug points (protocols in `voice/interface.py`)
 
