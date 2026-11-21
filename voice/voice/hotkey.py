@@ -16,6 +16,20 @@ from typing import Optional
 RIGHT_OPTION_VK = 0x3E  # kVK_RightOption on macOS
 
 
+def is_process_trusted() -> bool:
+    """AXIsProcessTrustedWithOptions(prompt=False) via ctypes (macOS only)."""
+    import ctypes
+    try:
+        hi = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/ApplicationServices.framework/"
+            "Frameworks/HIServices.framework/HIServices")
+        hi.AXIsProcessTrustedWithOptions.restype = ctypes.c_bool
+        hi.AXIsProcessTrustedWithOptions.argtypes = [ctypes.c_void_p]
+        return bool(hi.AXIsProcessTrustedWithOptions(None))  # None = no prompt
+    except Exception:
+        return True  # non-macOS or check unavailable: let pynput try
+
+
 def _is_right_option(key) -> bool:
     try:
         from pynput.keyboard import Key
@@ -44,6 +58,20 @@ class PushToTalk:
         import sys
         from pynput import keyboard
         self._loop = asyncio.get_event_loop()
+        if not is_process_trusted():
+            real = os.path.realpath(sys.executable)
+            raise RuntimeError(
+                "macOS has not trusted this process for input monitoring "
+                "(AXIsProcessTrusted = false), so no key events will arrive. "
+                "The process to trust is the Python binary ITSELF, not the "
+                "terminal:\n"
+                f"  {real}\n"
+                "Add it to BOTH: System Settings -> Privacy & Security -> "
+                "Accessibility AND -> Input Monitoring -> '+' -> paste that "
+                "path. Then RESTART this process (trust applies at exec).\n"
+                "Open the pane directly: open 'x-apple.systempreferences:"
+                "com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility'\n"
+                "Prefer no permissions? Run with --realtime alone (VAD mode).")
         try:
             self._listener = keyboard.Listener(
                 on_press=lambda k: self._set(True) if _is_right_option(k) else None,
