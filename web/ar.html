@@ -525,6 +525,9 @@ function relayout() {
     });
     rowTop -= rowH + 0.35;
   }
+  // center the cluster on the user's view using the real bounding box (1, 2, or many laptops)
+  if (renderer.xr.isPresenting && !world.userData.grabbedBy) recenter();
+  else frameContentView();
 }
 
 function applyState(snap) {
@@ -722,31 +725,115 @@ for (let i = 0; i < 2; i++) {
   controllers.push(c);
 }
 const _fwd = new THREE.Vector3(), _camPos = new THREE.Vector3();
-// anchor the world (origin = viewer) on the head: position incl. eye height, forward yaw only
+// Place the whole laptop cluster so its bounding-box center sits on the viewer's
+// horizontal gaze (yaw only), at eye height, a comfortable distance away.
 let recenterFrames = [], xrFrame = 0, outOfViewSince = 0;
 const _q = new THREE.Quaternion(), _e = new THREE.Euler();
-function recenter() {
-  if (!renderer.xr.isPresenting) return;
-  if (world.userData.grabbedBy) { scene.attach(world); world.userData.grabbedBy = null; }
-  const xrCam = renderer.xr.getCamera();
-  xrCam.updateMatrixWorld(true);
-  xrCam.getWorldPosition(_camPos);
-  xrCam.getWorldDirection(_fwd);  // -z of the head
-  _fwd.y = 0;
-  let yaw = world.rotation.y;
-  if (_fwd.lengthSq() > 1e-4) { _fwd.normalize(); yaw = Math.atan2(-_fwd.x, -_fwd.z); }  // ignore pitch/roll
-  world.position.copy(_camPos);
-  placeVrFloor();
-  world.rotation.set(0, yaw, 0);
-  world.scale.setScalar(AR_SCALE);
-  outOfViewSince = 0;
+const _invW = new THREE.Matrix4(), _corner = new THREE.Vector3();
+const _localBox = new THREE.Box3(), _worldBox = new THREE.Box3(), _scratchBox = new THREE.Box3();
+const _localCenter = new THREE.Vector3(), _worldCenter = new THREE.Vector3(), _worldSize = new THREE.Vector3();
+const _scaledCenter = new THREE.Vector3(), _placeTarget = new THREE.Vector3(), _yawAxis = new THREE.Vector3(0, 1, 0);
+const _headFwd = new THREE.Vector3(), _zero = new THREE.Vector3(), _negZ = new THREE.Vector3(0, 0, -1);
+
+function localContentBox(out) {
+  out.makeEmpty();
+  world.updateMatrixWorld(true);
+  _invW.copy(world.matrixWorld).invert();
+  for (const g of laptopGroups.values()) {
+    const tmp = _scratchBox.setFromObject(g, true);
+    if (tmp.isEmpty()) continue;
+    const { min, max } = tmp;
+    for (let i = 0; i < 8; i++) {
+      _corner.set(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z).applyMatrix4(_invW);
+      out.expandByPoint(_corner);
+    }
+  }
+  if (out.isEmpty()) {
+    const r = IN_AR() ? LAYOUT.ar.radius : LAYOUT.desk.radius;
+    out.set(new THREE.Vector3(-0.5, -0.4, -r - 0.4), new THREE.Vector3(0.5, 0.8, -r + 0.4));
+  }
+  return out;
 }
-// auto-recenter when the whole arc has been behind / beside you for more than 3 s
+
+function contentWorldBox(out) {
+  out.makeEmpty();
+  world.updateMatrixWorld(true);
+  for (const g of laptopGroups.values()) out.expandByObject(g);
+  return out;
+}
+
+// Put the content bbox center `dist` metres in front of headPos, along horizontal headFwd, at eye height.
+function placeWorldInFrontOf(headPos, headFwd, scale, dist) {
+  const fwd = _headFwd.copy(headFwd); fwd.y = 0;
+  if (fwd.lengthSq() > 1e-4) fwd.normalize(); else fwd.copy(_negZ);
+  const yaw = Math.atan2(-fwd.x, -fwd.z);
+  world.scale.setScalar(scale);
+  world.rotation.set(0, yaw, 0);
+  localContentBox(_localBox);
+  _localBox.getCenter(_localCenter);
+  _scaledCenter.copy(_localCenter).multiplyScalar(scale);
+  _scaledCenter.applyAxisAngle(_yawAxis, yaw);
+  _placeTarget.copy(headPos).addScaledVector(fwd, dist);
+  _placeTarget.y = headPos.y;
+  world.position.copy(_placeTarget).sub(_scaledCenter);
+}
+
+function recenter() {
+  if (world.userData.grabbedBy) { scene.attach(world); world.userData.grabbedBy = null; }
+  if (renderer.xr.isPresenting) {
+    const xrCam = renderer.xr.getCamera();
+    xrCam.updateMatrixWorld(true);
+    xrCam.getWorldPosition(_camPos);
+    xrCam.getWorldQuaternion(_q);
+    _fwd.set(0, 0, -1).applyQuaternion(_q);
+    _fwd.y = 0;
+    if (_fwd.lengthSq() > 1e-4) _fwd.normalize(); else _fwd.copy(_negZ);
+    placeWorldInFrontOf(_camPos, _fwd, AR_SCALE, AR_DISTANCE_M);
+    placeVrFloor();
+    outOfViewSince = 0;
+    return;
+  }
+  if (XR_PREVIEW && !SPECTATE) {
+    placeWorldInFrontOf(_zero, _negZ, AR_SCALE, AR_DISTANCE_M);
+  }
+}
+
+let _framedN = -1;
+function frameContentView(force = false) {
+  if (renderer.xr.isPresenting) return;
+  if (!force && laptopGroups.size === _framedN && !XR_PREVIEW) return;
+  _framedN = laptopGroups.size;
+  if (XR_PREVIEW && !SPECTATE) {
+    placeWorldInFrontOf(_zero, _negZ, AR_SCALE, AR_DISTANCE_M);
+    camera.position.set(0, 0, 0);
+    camera.quaternion.identity();
+    camera.lookAt(0, 0, -1);
+    camera.fov = 90;
+    camera.updateProjectionMatrix();
+    return;
+  }
+  if (SPECTATE && lastPose && (performance.now() - lastPoseAt) < 2000) return; // live follow handles this
+  contentWorldBox(_worldBox);
+  if (_worldBox.isEmpty()) return;
+  _worldBox.getCenter(_worldCenter);
+  _worldBox.getSize(_worldSize);
+  const span = Math.max(_worldSize.x, _worldSize.y, _worldSize.z, 0.6);
+  const dist = Math.max(span * 1.35, IN_AR() ? 1.8 : 4.2);
+  orbit.target.copy(_worldCenter);
+  camera.position.copy(_worldCenter).add(new THREE.Vector3(0, span * 0.28, dist));
+  camera.lookAt(_worldCenter);
+  orbit.update();
+}
+
+// auto-recenter when the whole cluster has been behind / beside you for more than 3 s
 const _toArc = new THREE.Vector3(), _arcC = new THREE.Vector3();
 function watchOutOfView(cam, now) {
   if (world.userData.grabbedBy) { outOfViewSince = 0; return; }
-  cam.getWorldPosition(_camPos); cam.getWorldDirection(_fwd);
-  _arcC.set(0, 0, -LAYOUT.ar.radius); world.localToWorld(_arcC);
+  cam.getWorldPosition(_camPos); cam.getWorldQuaternion(_q);
+  _fwd.set(0, 0, -1).applyQuaternion(_q);
+  localContentBox(_localBox);
+  _localBox.getCenter(_arcC);
+  world.localToWorld(_arcC);
   _toArc.subVectors(_arcC, _camPos).normalize();
   if (_toArc.dot(_fwd) > Math.cos(THREE.MathUtils.degToRad(80))) { outOfViewSince = 0; return; }
   if (!outOfViewSince) outOfViewSince = now;
@@ -935,10 +1022,17 @@ function setSpecView(mode) {
   } else {
     orbit.enabled = true;
     camera.fov = 55; camera.updateProjectionMatrix();
-    if (lastPose && lastPose.head) {
+    contentWorldBox(_worldBox);
+    if (!_worldBox.isEmpty()) {
+      _worldBox.getCenter(_worldCenter);
+      orbit.target.copy(_worldCenter);
+      const span = Math.max(_worldBox.max.x - _worldBox.min.x, _worldBox.max.y - _worldBox.min.y, 0.6);
+      camera.position.copy(_worldCenter).add(new THREE.Vector3(0, span * 0.3, Math.max(span * 1.4, 1.8)));
+      orbit.update();
+    } else if (lastPose && lastPose.head) {
       _specHeadP.fromArray(lastPose.head.pos);
       orbit.target.copy(_specHeadP);
-      camera.position.copy(_specHeadP).add(new THREE.Vector3(0.7, 0.85, 1.6));
+      camera.position.copy(_specHeadP).add(new THREE.Vector3(0, 0.85, 1.6));
       orbit.update();
     }
   }
@@ -1022,20 +1116,26 @@ function updateSpectator(dt) {
     specAct.textContent = bits.join(' · ');
   }
   const k = 1 - Math.exp(-dt * 14);
+  contentWorldBox(_worldBox);
+  if (!_worldBox.isEmpty()) _worldBox.getCenter(_worldCenter);
+  const lookAt = (!_worldBox.isEmpty()) ? _worldCenter : _specHeadP;
   if (specView === 'first' && lastPose && lastPose.head) {
     orbit.enabled = false;
     camera.position.lerp(_specHeadP, k);
     camera.quaternion.slerp(_specHeadQ, k);
   } else {
     orbit.enabled = true;
-    if (live) orbit.target.lerp(_specHeadP, 1 - Math.exp(-dt * 3));
+    if (live) orbit.target.lerp(lookAt, 1 - Math.exp(-dt * 3));
     orbit.update();
   }
   if (live && lastPose && lastPose.head) {
     pipCam.position.copy(_specHeadP);
     pipCam.quaternion.copy(_specHeadQ);
-    pipChase.position.copy(_specHeadP).add(new THREE.Vector3(0.7, 0.85, 1.6));
-    pipChase.lookAt(_specHeadP);
+    const back = _headFwd.copy(_specHeadP).sub(lookAt); back.y = 0;
+    if (back.lengthSq() < 1e-4) back.set(0, 0, 1); else back.normalize();
+    pipChase.position.copy(lookAt).addScaledVector(back, 1.8);
+    pipChase.position.y = lookAt.y + 0.7;
+    pipChase.lookAt(lookAt);
   }
   if (statusEl && performance.now() > statusHoldUntil) {
     const n = laptopGroups.size;
@@ -1055,12 +1155,9 @@ if (SPECTATE) {
   vrEnv.visible = true;
   scene.background = vrSky;
   vrEnv.position.set(0, -1.5, 0);
-  camera.position.set(0.4, 0.7, 2.0);
-  camera.lookAt(0, 0.1, -1.1);
-  orbit.target.set(0, 0.1, -1.1);
   orbit.minDistance = 0.35;
   orbit.maxDistance = 18;
-  orbit.update();
+  frameContentView(true);
   layoutPipFrame();
   setSpecView('third');
   if (specViewBtn) specViewBtn.addEventListener('click', () => setSpecView(specView === 'first' ? 'third' : 'first'));
@@ -1463,7 +1560,9 @@ renderer.setAnimationLoop(() => {
 
 if (XR_PREVIEW && !SPECTATE) {
   world.scale.setScalar(AR_SCALE); grid.visible = false; orbit.enabled = false;
-  camera.fov = 90; camera.position.set(0, 0, 0); camera.lookAt(0, 0, -1); camera.updateProjectionMatrix();
+  camera.fov = 90; camera.updateProjectionMatrix();
+  placeWorldInFrontOf(_zero, _negZ, AR_SCALE, AR_DISTANCE_M);
+  camera.position.set(0, 0, 0); camera.lookAt(0, 0, -1);
   orbit.update = () => {};
 }
 addEventListener('resize', () => {
