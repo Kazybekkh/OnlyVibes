@@ -82,11 +82,31 @@ export function useOnlyVibes(url: string, demo: boolean, nonce: number): LiveSta
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [status, setStatus] = useState<ConnStatus>('connecting');
   const [lastSeen, setLastSeen] = useState<number | null>(null);
+  // auto-demo: if the hub is unreachable for a few seconds, show the fake
+  // fleet so the app never renders empty (status pill shows DEMO)
+  const [autoDemo, setAutoDemo] = useState(false);
   const demoTick = useRef(0);
   const tracks = useRef(new Map<string, AgentTrack>());
+  // reset auto-demo when the target changes (render-phase adjust, per React docs)
+  const attemptKey = `${nonce}:${url}`;
+  const [prevKey, setPrevKey] = useState(attemptKey);
+  if (prevKey !== attemptKey) {
+    setPrevKey(attemptKey);
+    setAutoDemo(false);
+  }
 
   useEffect(() => {
-    if (demo) {
+    if (demo || autoDemo || snapshot) return;
+    const t = setTimeout(() => {
+      if (!snapshot) setAutoDemo(true);
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [demo, autoDemo, snapshot]);
+
+  const effectiveDemo = demo || autoDemo;
+
+  useEffect(() => {
+    if (effectiveDemo) {
       const push = () => {
         demoTick.current += 1;
         setSnapshot(enrich(demoSnapshot(demoTick.current), tracks.current, Date.now()));
@@ -171,9 +191,9 @@ export function useOnlyVibes(url: string, demo: boolean, nonce: number): LiveSta
       if (pollTimer) clearInterval(pollTimer);
       try { ws?.close(); } catch { /* already closed */ }
     };
-  }, [url, demo, nonce]);
+  }, [url, effectiveDemo, nonce]);
 
-  const derived: ConnStatus = !normalizeUrl(url) ? 'offline' : demo ? 'demo' : status;
+  const derived: ConnStatus = !normalizeUrl(url) ? 'offline' : effectiveDemo ? 'demo' : status;
   return useMemo(
     () => ({ snapshot, status: derived, lastSeen }),
     [snapshot, derived, lastSeen],
