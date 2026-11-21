@@ -836,6 +836,10 @@ def focus_agent(info: dict) -> dict:
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
     if r.returncode != 0:
         return {"ok": False, "message": f"couldn't focus {host['app']}"}
+    if system == "Darwin":  # second nudge: `open -a` alone sometimes loses to the app the user just clicked
+        time.sleep(0.3)
+        subprocess.run(["osascript", "-e", f'tell application "{host["bundle"]}" to activate'],
+                       capture_output=True, text=True, timeout=6)
     print(f"[reporter] control: focused {host['app']}")
     return {"ok": True, "message": f"focused {host['app']}"}
 
