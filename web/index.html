@@ -49,7 +49,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled = true;
-renderer.xr.setReferenceSpaceType('local-floor');
+renderer.xr.setReferenceSpaceType('local'); // origin = viewer at session start
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -275,17 +275,33 @@ setTimeout(() => {
 const arButton = ARButton.createButton(renderer, { optionalFeatures: ['hit-test', 'local-floor'] });
 arButton.textContent = '📱 Enter AR';
 document.body.appendChild(arButton);
-// in AR, put the table ~1.5m in front of the user instead of at their feet
-renderer.xr.addEventListener('sessionstart', () => { world.position.set(0, 0, -1.5); });
-renderer.xr.addEventListener('sessionend', () => { world.position.set(0, 0, 0); });
+// in AR ('local' space: origin at the viewer, -z is forward): shrink the whole
+// world to a tabletop miniature, 0.8m in front of the viewer at chest height
+renderer.xr.addEventListener('sessionstart', () => {
+  world.scale.setScalar(0.15);
+  world.position.set(0, -0.3, -0.8);
+});
+renderer.xr.addEventListener('sessionend', () => {
+  world.scale.setScalar(1);
+  world.position.set(0, 0, 0);
+});
 
 // ---------------------------------------------------------------- loop / resize
 const clock = new THREE.Clock();
+const _camQ = new THREE.Quaternion(), _parentQ = new THREE.Quaternion();
 renderer.setAnimationLoop(() => {
   const t = clock.getElapsedTime();
+  // active camera: XR headset camera while presenting, desktop camera otherwise
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  cam.getWorldQuaternion(_camQ);
   for (const g of laptopGroups.values()) {
+    g.updateWorldMatrix(true, false);
+    g.getWorldQuaternion(_parentQ).invert();
+    // billboard every text card (laptop label + agent cards) to face the camera
+    if (g.userData.label) g.userData.label.quaternion.copy(_parentQ).multiply(_camQ);
     let j = 0;
     for (const card of g.userData.cards.values()) {
+      card.quaternion.copy(_parentQ).multiply(_camQ);
       card.position.y = (card.userData.baseY ?? 1.05) + Math.sin(t * 2 + j) * 0.03;
       j++;
     }
