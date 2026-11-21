@@ -39,6 +39,8 @@ Endpoints:
                         lists one synthesized laptop per connected worker whose "agents" are the
                         tasks it runs (merged into the reporter entry with the same tailscale_ip)
     POST /summarize  -> {"last_log": "..."} -> {"summary": "..."} via Mistral Small
+    GET  /api/layout -> real-table AR layout {ref, laptops: {key: {x,y,z,yaw,owner}}} (also in /view)
+    POST /api/layout -> replace it (control key required), saved to data/layout.json
   Static
     GET  /           -> web/index.html (kanban board)
     GET  /ar         -> web/ar.html (old Three.js / WebXR view)
@@ -440,6 +442,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             control_waiters.pop(rid, None)
 
+    # ------------------------------------------------------------ AR table layout
+    # Real-table placement of the virtual laptops (web/ar.html "Place laptops"). Positions
+    # are metres in a frame anchored on the reference laptops: ref[0] is the origin, and the
+    # direction ref[0] -> ref[1] fixes the rotation, so a new WebXR session only has to
+    # re-place those two laptops and every other one snaps into place.
+    layout_path = settings.data_dir / "layout.json"
+    layout_state: dict = {"ref": [], "laptops": {}}
+    try:
+        layout_state.update(json.loads(layout_path.read_text()))
+    except (OSError, ValueError):
+        pass
+
+    def _clean_layout(body: dict) -> dict:
+        import math
+        laptops_in = body.get("laptops")
+        if not isinstance(laptops_in, dict) or len(laptops_in) > 64:
+            raise ApiError(400, "bad_request", "laptops must be an object with at most 64 entries")
+        laptops: dict[str, dict] = {}
+        for key, v in laptops_in.items():
+            if not isinstance(key, str) or not key or len(key) > 120 or not isinstance(v, dict):
+                raise ApiError(400, "bad_request", "each laptop needs a key and an {x,y,z,yaw} object")
+            entry = {}
+            for f in ("x", "y", "z", "yaw"):
+                n = v.get(f, 0.0)
+                if isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(n) or abs(n) > 1000:
+                    raise ApiError(400, "bad_request", f"{key}.{f} must be a finite number")
+                entry[f] = round(float(n), 4)
+            entry["owner"] = str(v.get("owner") or "")[:80]
+            laptops[key] = entry
+        ref = [str(k) for k in (body.get("ref") or []) if str(k) in laptops][:2]
+        if laptops and not ref:
+            ref = [sorted(laptops)[0]]
+        return {"ref": ref, "laptops": laptops, "updated_at": now()}
+
+    @app.get("/api/layout")
+    async def get_layout() -> dict:
+        return layout_state
+
+    @app.post("/api/layout", dependencies=[Depends(require_control_key)])
+    async def post_layout(request: Request) -> dict:
+        clean = _clean_layout(await _json_body(request))
+        layout_state.clear()
+        layout_state.update(clean)
+        layout_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = layout_path.with_name("layout.json.tmp")
+        tmp.write_text(json.dumps(clean, indent=2))
+        os.replace(tmp, layout_path)
+        return layout_state
+
     @app.websocket("/view")
     async def ws_view(websocket: WebSocket) -> None:
         """Broadcast the full laptop-state snapshot to every viewer, 2x per second."""
@@ -449,7 +500,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 async with hub.lock:
                     t = now()
-                    msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t)})
+                    msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t),
+                                      "layout": layout_state})
                 await websocket.send_text(msg)
                 await asyncio.sleep(0.5)
         except (WebSocketDisconnect, RuntimeError):
