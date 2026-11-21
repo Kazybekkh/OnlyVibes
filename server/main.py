@@ -82,7 +82,7 @@ async def summarize(last_log: str) -> str:
     if not line:
         return ""
     if not MISTRAL_API_KEY:
-        return line[:120]
+        return ""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -97,9 +97,9 @@ async def summarize(last_log: str) -> str:
                         {
                             "role": "system",
                             "content": (
-                                "You summarize one log line from an AI coding agent "
-                                "into a single short plain-English sentence (max 12 words). "
-                                "No preamble, no quotes, no emoji."
+                                "From one log line of an AI coding agent, name the task it is "
+                                "working on as a short title (max 6 words), like a chat title. "
+                                "No preamble, no quotes, no emoji, no file paths or IDs."
                             ),
                         },
                         {"role": "user", "content": line[:500]},
@@ -111,7 +111,7 @@ async def summarize(last_log: str) -> str:
         return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as exc:  # never let summarization break ingestion
         print(f"[summarize] fallback after error: {exc}")
-        return line[:120]
+        return ""
 
 
 def snapshot() -> dict:
