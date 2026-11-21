@@ -17,11 +17,13 @@ npm install
 npx expo start          # then press "i" for the iOS simulator (or scan QR in Expo Go)
 ```
 
-The app defaults to the team hub **`http://100.107.184.10:8000`** (Kazybek's
-MacBook over Tailscale, per `shared/PROTOCOL.md`). Change it in **Settings**
-(any `http(s)://host:port` — the Tailscale IP of the laptop running the hub),
-or toggle **Demo mode** for fake data. Override the default at start with
-`EXPO_PUBLIC_SERVER_URL=http://<hub>:8000 npx expo start`.
+The app defaults to the **public hub** `https://months-shapes-reductions-webpage.trycloudflare.com`
+— the same deployment the web board runs on, so the phone shows the same live
+fleet from anywhere (no Tailscale needed; `https://` is mapped to
+`wss://…/view` automatically). Change it in **Settings** (e.g. the tailnet hub
+`http://100.107.184.10:8000` per `shared/PROTOCOL.md`), or toggle **Demo mode**
+for fake data. Override the default at start with
+`EXPO_PUBLIC_SERVER_URL=https://<hub> npx expo start`.
 
 ```bash
 # hub (on one laptop)

@@ -10,10 +10,13 @@ export interface ServerConfig {
   nonce: number;
 }
 
-// Team hub over Tailscale (shared/PROTOCOL.md); override with
-// EXPO_PUBLIC_SERVER_URL or in the Settings tab.
+// Public hub (same deployment as the web board at this URL) — reachable from
+// anywhere, no Tailscale needed. https:// is mapped to wss://…/view for the
+// live feed. Override with EXPO_PUBLIC_SERVER_URL or in the Settings tab
+// (e.g. the tailnet hub http://100.107.184.10:8000 per shared/PROTOCOL.md).
 const DEFAULT_URL =
-  (process.env.EXPO_PUBLIC_SERVER_URL as string | undefined) ?? 'http://100.107.184.10:8000';
+  (process.env.EXPO_PUBLIC_SERVER_URL as string | undefined) ??
+  'https://months-shapes-reductions-webpage.trycloudflare.com';
 
 let config: ServerConfig = { url: DEFAULT_URL, demo: false, nonce: 0 };
 const listeners = new Set<() => void>();
