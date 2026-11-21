@@ -24,6 +24,7 @@ class Settings:
     web_dir: Path = field(default_factory=lambda: SERVER_DIR.parent / "web")
     public_url: str = ""          # base URL agents use for `ov` (else derived from the worker's Host header)
     shared_secret: str = ""       # if set, WS /worker requires ?secret=<value>
+    control_secret: str = ""      # if set, mutating control endpoints require ?key=<value> or X-OV-Key
     persist: bool = True          # tests may disable disk writes
     # orchestration timing (PROTOCOL.md §2/§3)
     offline_after: float = 15.0   # worker offline after this long without any message
@@ -49,6 +50,7 @@ class Settings:
             s.web_dir = Path(os.environ["OV_WEB_DIR"]).expanduser().resolve()
         s.public_url = os.environ.get("PUBLIC_URL", "").strip().rstrip("/")
         s.shared_secret = os.environ.get("OV_SHARED_SECRET", "")
+        s.control_secret = os.environ.get("OV_CONTROL_SECRET", "")
         s.stale_after = _float("STALE_AFTER", s.stale_after)
         s.mistral_api_key = os.environ.get("MISTRAL_API_KEY", "")
         s.mistral_model = os.environ.get("MISTRAL_MODEL", s.mistral_model)

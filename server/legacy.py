@@ -23,7 +23,11 @@ class LegacyState:
         self.states: dict[str, dict] = {}
 
     def ingest(self, data: dict) -> None:
-        key = data.get("tailscale_ip") or data.get("laptop") or "unknown"
+        # key by Tailscale IP; fall back to hostname when the IP is missing
+        # or just the reporter's loopback fallback
+        key = (data.get("tailscale_ip") or "").strip()
+        if not key or key == "127.0.0.1":
+            key = data.get("laptop") or "unknown"
         self.states[key] = data
 
     def prune(self, now: float) -> None:
@@ -37,15 +41,16 @@ class LegacyState:
 
 async def summarize(last_log: str, api_key: str, model: str) -> str:
     """
-    Turn one raw agent log line into a single plain-English line using
-    Mistral Small. Stub behavior: without MISTRAL_API_KEY (or on any API
-    error) it returns the truncated raw line, so the demo works keyless.
+    Turn one raw agent log line into a short task title (max 6 words, like a
+    chat title) using Mistral Small. Without MISTRAL_API_KEY (or on any API
+    error) it returns "" — the UI then shows the reporter's session title or
+    just the agent name.
     """
     line = (last_log or "").strip()
     if not line:
         return ""
     if not api_key:
-        return line[:120]
+        return ""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -57,9 +62,9 @@ async def summarize(last_log: str, api_key: str, model: str) -> str:
                         {
                             "role": "system",
                             "content": (
-                                "You summarize one log line from an AI coding agent "
-                                "into a single short plain-English sentence (max 12 words). "
-                                "No preamble, no quotes, no emoji."
+                                "From one log line of an AI coding agent, name the task it is "
+                                "working on as a short title (max 6 words), like a chat title. "
+                                "No preamble, no quotes, no emoji, no file paths or IDs."
                             ),
                         },
                         {"role": "user", "content": line[:500]},
@@ -71,4 +76,4 @@ async def summarize(last_log: str, api_key: str, model: str) -> str:
         return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as exc:  # never let summarization break ingestion
         print(f"[summarize] fallback after error: {exc}")
-        return line[:120]
+        return ""

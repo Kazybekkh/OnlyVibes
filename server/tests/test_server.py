@@ -753,7 +753,8 @@ def test_static_and_legacy(client):
     assert "board" in client.get("/board.js").text
     status, body = api(client, "GET", "/api/does-not-exist")
     assert status == 404 and body["error"]["code"] == "not_found"
-    assert client.post("/summarize", json={"last_log": "x" * 300}).json()["summary"] == "x" * 120
+    # no MISTRAL_API_KEY in tests -> task-title summarize() returns "" (ported from kazy/ar-fixes)
+    assert client.post("/summarize", json={"last_log": "x" * 300}).json()["summary"] == ""
 
     project = client.post("/api/projects", json={"prompt": "legacy view"}).json()
     w = FakeWorker(client, "w1")
