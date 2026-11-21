@@ -45,6 +45,7 @@ def test_focus_command_is_fixed_argv():
 def test_handle_control_focus_routes_and_unknown_card():
     r._CONTROL.clear()
     assert r.handle_control({"agent": "nope", "action": "focus"})["ok"] is False
-    r._CONTROL["vibe"] = {"agent": "vibe", "kind": "app", "pid": 0, "ctime": 0, "cwd": "", "log": ""}
-    assert "no running process" in r.handle_control({"agent": "vibe", "action": "focus"})["message"]
+    r._CONTROL["x"] = {"agent": "not-an-agent", "kind": "session", "pid": 0, "ctime": 0, "cwd": "", "log": ""}
+    assert "no running process" in r.handle_control({"agent": "x", "action": "focus"})["message"]
+    assert r._desktop_app_pid("not-an-agent") == 0
     r._CONTROL.clear()

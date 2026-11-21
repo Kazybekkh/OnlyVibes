@@ -815,8 +815,24 @@ def focus_command(host: dict, system: str) -> list[str] | None:
     return None
 
 
+# desktop app per agent family: pid-less cards (sessions read from an app's logs) focus that app
+AGENT_DESKTOP_APP = {"claude-code": "Claude", "codex": "Codex", "cursor": "Cursor", "vibe": "Vibe"}
+
+
+def _desktop_app_pid(agent: str) -> int:
+    app = AGENT_DESKTOP_APP.get(agent)
+    if not app or platform.system() != "Darwin":
+        return 0
+    want = f"/{app}.app/Contents/MacOS/"
+    for p in psutil.process_iter(["pid", "exe"]):
+        exe = p.info.get("exe") or ""
+        if want in exe and _mac_bundle(exe) and _mac_bundle(exe)[1] == app:
+            return p.info["pid"]
+    return 0
+
+
 def focus_agent(info: dict) -> dict:
-    pid = int(info.get("pid") or 0)
+    pid = int(info.get("pid") or 0) or _desktop_app_pid(str(info.get("agent") or ""))
     if not pid:
         return {"ok": False, "message": "this session has no running process to focus"}
     system = platform.system()
