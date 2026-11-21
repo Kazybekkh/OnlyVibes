@@ -1,0 +1,9 @@
+[project]
+name = "onlyvibes-reporter"
+version = "0.1.0"
+description = "OnlyVibes laptop reporter: detects AI coding agent processes (psutil), tails their logs, streams status over websockets"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=6.1",
+    "websockets>=14.0",
+]
