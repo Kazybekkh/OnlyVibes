@@ -46,9 +46,9 @@ Endpoints:
     GET  /ar         -> web/ar.html (Three.js / WebXR view, with voice)
     GET  /mic        -> web/mic.html (fallback voice mic page, role=web)
     GET  /probe      -> web/probe.html (Zapbox capability probe)
-  Voice (server/voice.py; token/chat/turn/config POST need the control key)
-    POST /api/voice/token | /api/voice/chat | /api/voice/turn | /api/voice/log
-    GET|POST /api/voice/config, GET /api/voice/health; /view also carries "voice" + "voice_config"
+  Voice (server/voice.py): push-to-talk speech-to-text only
+    POST /api/voice/token -> short-lived Voxtral STT token (control key required), POST /api/voice/log,
+    GET /api/voice/health. The transcript goes to POST /api/control action=redirect.
     GET  /<file>     -> anything else in web/ (board.js, board.css, ...)
 
 Errors are JSON: {"error": {"code": "...", "message": "..."}} with a 4xx status.
@@ -412,9 +412,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         body = await _json_body(request)
         action = str(body.get("action") or "")
-        if action not in ("stop", "resume", "say", "focus"):
-            return _error(400, "bad_request", "action must be stop, resume, say or focus")
+        if action not in ("stop", "resume", "say", "focus", "redirect"):
+            return _error(400, "bad_request", "action must be stop, resume, say, focus or redirect")
         text = " ".join(str(body.get("text") or "").split())[:500]
+        # redirect (voice): interrupt the agent and give it `text` as its new prompt
+        if action == "redirect" and not text:
+            return _error(400, "bad_request", "text is required")
         task_id = str(body.get("task_id") or "")
         if task_id and action == "focus":
             return {"ok": False, "message": "orchestra tasks run headless on the worker: no window to open"}
@@ -429,6 +432,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     return {"ok": True, "message": f"requeued {task['key']}"}
                 if not text:
                     return _error(400, "bad_request", "text is required")
+                # say / redirect: orchestra agents read their inbox between steps
                 hub.human_message({"project_id": task["project_id"], "to": task_id, "text": text, "name": "AR"})
                 return {"ok": True, "message": f"sent to {task['key']}"}
         laptop, agent = str(body.get("laptop") or ""), str(body.get("agent") or "")
@@ -441,7 +445,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await sock.send_text(json.dumps({"type": "control", "id": rid, "agent": agent,
                                              "action": action, "text": text}))
-            return await asyncio.wait_for(fut, timeout=5.0)
+            # redirect waits for the old process to exit before resuming it
+            return await asyncio.wait_for(fut, timeout=25.0 if action == "redirect" else 5.0)
         except asyncio.TimeoutError:
             return _error(504, "timeout", "no answer from that laptop: its reporter may be an older "
                                           "version (pull and restart it)")
@@ -500,8 +505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return layout_state
 
     # ---------------------------------------------------------------- voice (Ron's voice-integration)
-    voice_router, voice_state = make_router(settings, hub, require_control_key, now)
-    app.include_router(voice_router)
+    app.include_router(make_router(settings, require_control_key))
 
     @app.websocket("/view")
     async def ws_view(websocket: WebSocket) -> None:
@@ -513,8 +517,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 async with hub.lock:
                     t = now()
                     msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t),
-                                      "layout": layout_state,
-                                      "voice": voice_state.turn, "voice_config": voice_state.config})
+                                      "layout": layout_state})
                 await websocket.send_text(msg)
                 await asyncio.sleep(0.5)
         except (WebSocketDisconnect, RuntimeError):

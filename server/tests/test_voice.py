@@ -1,34 +1,33 @@
-"""Voice routes (server/voice.py): key gating, validation, grounding, pages."""
+"""Voice (server/voice.py, STT only) + the redirect control action it feeds."""
 from __future__ import annotations
 
+import threading
 import time
+from pathlib import Path
 
 import httpx
 
-import voice as voice_mod
 from test_server import make_client  # noqa: F401  (fixture)
 
 K = {"X-OV-Key": "s3cret"}
+STT = "voxtral-mini-transcribe-realtime-3"
 
 
-def test_voice_spending_routes_need_the_key(make_client):
+def test_voice_token_needs_key_and_only_stt(make_client):
     c = make_client(control_secret="s3cret", mistral_api_key="sk-test")
-    for path, body in [("/api/voice/token", {"model": "voxtral-mini-tts-3-0"}),
-                       ("/api/voice/chat", {"messages": [{"role": "user", "content": "hi"}]}),
-                       ("/api/voice/turn", {"heard": "x", "reply": "y"}),
-                       ("/api/voice/config", {"toggle": "mic"})]:
-        assert c.post(path, json=body).status_code == 403, path
-        assert c.post(path + "?key=wrong", json=body).status_code == 403, path
-    # reading stays open
+    assert c.post("/api/voice/token", json={"model": STT}).status_code == 403
+    assert c.post("/api/voice/token?key=wrong", json={"model": STT}).status_code == 403
+    assert c.post("/api/voice/token", json={"model": "voxtral-mini-tts-3-0"}, headers=K).status_code == 400
     assert c.get("/api/voice/health").json()["voice"] is True
-    assert c.get("/api/voice/config").json()["mic"] in ("browser", "web")
     assert c.post("/api/voice/log", json={"ev": "probe"}).json() == {"ok": True}
+    # the Q&A / TTS routes are gone
+    for path in ("/api/voice/chat", "/api/voice/turn", "/api/voice/config"):
+        assert c.post(path, json={}, headers=K).status_code in (404, 405), path
 
 
-def test_voice_token_validation_and_no_key(make_client):
+def test_voice_token_without_mistral_key(make_client):
     c = make_client(control_secret="s3cret")
-    assert c.post("/api/voice/token", json={"model": "gpt-4"}, headers=K).status_code == 400
-    assert c.post("/api/voice/token?key=s3cret", json={"model": "voxtral-mini-tts-3-0"}).status_code == 503
+    assert c.post("/api/voice/token?key=s3cret", json={"model": STT}).status_code == 503
     assert c.get("/api/voice/health").json()["voice"] is False
 
 
@@ -41,41 +40,48 @@ def test_voice_token_mint_proxied(make_client, monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
     c = make_client(control_secret="s3cret", mistral_api_key="sk-test")
-    r = c.post("/api/voice/token", json={"model": "voxtral-mini-transcribe-realtime-3"}, headers=K)
-    assert r.status_code == 200 and r.json() == {"token": "rt_abc", "expires_at": 123,
-                                                 "model": "voxtral-mini-transcribe-realtime-3"}
+    r = c.post("/api/voice/token", json={"model": STT}, headers=K)
+    assert r.status_code == 200 and r.json() == {"token": "rt_abc", "expires_at": 123, "model": STT}
     assert seen["url"].endswith("/client/sessions") and seen["auth"] == "Bearer sk-test"
-    assert "sk-test" not in r.text
+    assert seen["body"] == {"purpose": "realtime", "model": STT} and "sk-test" not in r.text
 
 
-def test_voice_turn_and_config_reach_view(make_client):
+def test_redirect_forwarded_to_reporter(make_client):
+    """Voice prompt -> /api/control redirect -> the target laptop's reporter (key required, text required)."""
     c = make_client(control_secret="s3cret")
-    assert c.post("/api/voice/config", json={"mic": "nope"}, headers=K).status_code == 400
-    cfg = c.post("/api/voice/config", json={"mic": "web", "speaker": "browser"}, headers=K).json()
-    assert cfg["mic"] == "web" and cfg["speaker"] == "browser"
-    tid = c.post("/api/voice/turn", json={"heard": "who is stuck", "reply": "nobody", "source_role": "web",
-                                          "speak_on": ["browser", "evil"]}, headers=K).json()["id"]
-    with c.websocket_connect("/view") as v:
-        snap = v.receive_json()
-    assert snap["voice"]["id"] == tid and snap["voice"]["speak_on"] == ["browser"]
-    assert snap["voice_config"]["mic"] == "web"
-
-
-def test_voice_context_is_grounded_on_live_agents(make_client):
-    c = make_client()
+    body = {"laptop": "100.0.0.8", "agent": "claude-code · OnlyVibes", "action": "redirect", "text": "run the tests"}
+    assert c.post("/api/control", json=body).status_code == 403
+    assert c.post("/api/control", json={**body, "text": ""}, headers=K).status_code == 400
     with c.websocket_connect("/ws") as rep:
-        rep.send_json({"laptop": "kay-mbp", "owner": "kay", "tailscale_ip": "100.0.0.9", "ts": time.time(),
-                       "agents": [{"name": "claude-code · OnlyVibes", "pid": 1, "cpu": 3, "cwd": "/x/OnlyVibes",
-                                   "last_log": "", "summary": "", "kind": "session", "task": "fix AR voice"}]})
-        time.sleep(0.2)
-        hub = c.app.state.hub
-        txt = voice_mod.voice_context(hub.legacy_laptops(time.time()))
-    assert "kay" in txt and "claude-code · OnlyVibes" in txt and "fix AR voice" in txt and "OnlyVibes" in txt
+        rep.send_json({"laptop": "kay-mbp", "owner": "kay", "tailscale_ip": "100.0.0.8", "ts": time.time(),
+                       "agents": [{"name": "claude-code · OnlyVibes", "pid": 1, "cpu": 0, "cwd": "", "last_log": "",
+                                   "summary": "", "kind": "session"}]})
+        seen = {}
+
+        def answer():
+            msg = rep.receive_json()
+            seen.update(msg)
+            rep.send_json({"type": "control_result", "id": msg["id"], "ok": True,
+                           "message": "interrupted claude-code · OnlyVibes and sent the new prompt"})
+
+        th = threading.Thread(target=answer)
+        th.start()
+        r = c.post("/api/control", json=body, headers=K)
+        th.join(5)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert seen["action"] == "redirect" and seen["text"] == "run the tests" and seen["agent"] == body["agent"]
+
+
+def test_redirect_task_card_goes_to_inbox(make_client):
+    c = make_client(control_secret="s3cret")
+    r = c.post("/api/control", json={"task_id": "nope", "action": "redirect", "text": "x"}, headers=K)
+    assert r.status_code == 404
 
 
 def test_voice_pages_served(make_client):
-    from pathlib import Path
     c = make_client(web_dir=Path(__file__).resolve().parents[2] / "web")
     for path in ("/mic", "/probe", "/voice.js", "/ar"):
         assert c.get(path).status_code == 200, path
-    assert "Hold to talk" in c.get("/ar").text and "voice.js" in c.get("/ar").text
+    ar = c.get("/ar").text
+    assert "Hold to talk" in ar and "voice.js" in ar and "action: 'redirect'" in ar
+    assert "action: 'redirect'" in c.get("/mic").text

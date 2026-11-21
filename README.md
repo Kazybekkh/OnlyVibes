@@ -127,23 +127,27 @@ Humans can join the conversation from the "Agent chatter" rail or from a task's 
 
 All worker variables are documented in `worker/worker.py`'s docstring, and all server variables in `server/main.py`'s.
 
-## Voice in Zapbox Browser (AR)
+## Voice prompts in Zapbox (AR)
 
-The headset (Zapbox, iPhone inside) opens `/ar`, taps **🎙 Enable voice** before **Enter AR**, then **holds B/Y**
-(xr-standard gamepad button 5) to ask out loud ("what is Carlo's Claude doing?", "is anyone stuck?") and hears a
-spoken answer grounded in the live agent data, with a head-locked "you said / reply" card.
+Voice is for interrupting one person's agent and giving it a new prompt. Voxtral is used only for
+speech-to-text (no spoken replies, no Q&A).
 
-- Links (add `?key=<OV_CONTROL_SECRET>` when the hub sets one; token/chat/turn/config POSTs need it):
-  `https://<hub>/ar?key=…` (headset), `https://<hub>/mic?key=…` (fallback mic), `https://<hub>/probe` (capability probe).
-- Push-to-talk: **hold B/Y** in AR. A/X and stick click stay "Place laptops", trigger selects cards, squeeze summons
-  the scene. Desktop / phone: the **Hold to talk** button (bottom right) or hold **Space**. `?ptt=<button index>`
-  or `?ptt=trigger` overrides.
-- Fallback when the headset mic doesn't work: open `/mic?key=…` on a laptop or phone and hold to talk there (it takes
-  the mic automatically, `mic=web`); with `speaker: headset` (default) the reply is spoken in the headset.
-- The voice bar's mic toggle and speaker menu switch roles at runtime (`POST /api/voice/config`).
-- The browser never sees the Mistral key: `/api/voice/token` mints short-lived `rt_*` tokens and the page talks to
-  the Voxtral realtime STT/TTS websockets directly (`voxtral-mini-transcribe-realtime-3` / `voxtral-mini-tts-3-0`).
-- Plan and probe notes: `voice/ZAPBOX_VOICE_PLAN.md`, `voice/ZAPBOX_PROBE.md`. Server side: `server/voice.py`.
+1. Open `https://<hub>/ar?key=<OV_CONTROL_SECRET>` in Zapbox Browser, tap **🎙 Enable voice**, then **Enter AR**.
+2. Point at an agent card and pull the **trigger**: it highlights and the head-locked card says
+   "Voice target: <agent> on <owner>'s laptop".
+3. **Hold B/Y** (xr-standard gamepad button 5), speak the new prompt, release.
+4. The transcript shows for 2 s ("press B/Y to cancel"), then `POST /api/control` `action=redirect` interrupts that agent
+   and sends the transcript as its new prompt. With no card selected it just says "Select an agent first".
+
+- What redirect does (reporter whitelist): Claude Code inside tmux gets Esc + the prompt typed into its pane (session
+  stays open); Claude Code in any other terminal gets Ctrl-C (it exits) and then `claude -p --resume <session> "<prompt>"`
+  continues the same conversation headless; orchestra task cards get the text in their inbox; other agents (codex, vibe,
+  cursor...) are interrupted only, and the card says they can't take a voice prompt yet.
+- Buttons: A/X and stick click stay "Place laptops", trigger selects cards, squeeze summons the scene. Desktop / phone:
+  click a card, then the **Hold to talk** button or hold **Space**. `?ptt=<button index>` or `?ptt=trigger` overrides.
+- Fallback mic: `https://<hub>/mic?key=…` on a laptop or phone: pick the agent in the dropdown, hold to talk, same redirect.
+- The browser never sees the Mistral key: `/api/voice/token` (control key required) mints a short-lived `rt_*` token for
+  `voxtral-mini-transcribe-realtime-3` and the page streams audio to Mistral directly. Probe page: `/probe`.
 
 ## v1 reporter schema (`shared/schema.json`, 3D tab)
 

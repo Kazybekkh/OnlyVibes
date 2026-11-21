@@ -71,14 +71,7 @@
 <div id="voicebar">
   <button id="voiceEnable" type="button">🎙 Enable voice</button>
   <button id="voiceTalk" type="button" style="display:none">Hold to talk</button>
-  <button id="micToggle" type="button">mic: browser</button>
-  <select id="speakerSel" title="where replies are spoken">
-    <option value="browser">speaker: headset</option>
-    <option value="web">speaker: /mic page</option>
-    <option value="mic">speaker: whoever talks</option>
-    <option value="all">speaker: all</option>
-  </select>
-  <span class="hint">in AR: hold B/Y to talk · desktop: hold Space</span>
+  <span class="hint">select an agent card, then hold B/Y in AR (Space on desktop) and speak its new prompt</span>
 </div>
 <script src="voice.js"></script>
 
@@ -534,7 +527,6 @@ function connect() {
     let snap;
     try { snap = JSON.parse(ev.data); } catch { return; /* ignore bad frame */ }
     try { applyState(snap); } catch (e) { console.warn(e); }
-    window.__applyVoice?.(snap);
   };
   ws.onclose = () => { if (!gotReal) statusEl.textContent = 'disconnected, retrying…'; setTimeout(connect, 2000); };
   ws.onerror = () => { if (!gotReal) statusEl.textContent = 'disconnected, retrying…'; };
@@ -553,11 +545,11 @@ renderer.xr.addEventListener('sessionstart', () => {
   world.position.set(0, -0.3, -0.8);
   setTimeout(summonWorld, 300); // once the headset pose is known, put it right in front of you
   const xs = renderer.xr.getSession();
-  if (PTT === 'trigger' && xs) {  // opt-in: trigger = talk (then it no longer selects cards reliably)
-    xs.addEventListener('selectstart', () => voice?.begin());
-    xs.addEventListener('selectend', () => voice?.end());
+  if (PTT === 'trigger' && xs) {  // opt-in: trigger = talk (select the card on desktop first)
+    xs.addEventListener('selectstart', () => pttDown());
+    xs.addEventListener('selectend', () => pttUp());
   }
-  voice?.log({ ev: 'xr-start', role: ROLE, clientId: CLIENT_ID, ptt: PTT });
+  voice?.log({ ev: 'xr-start', ptt: PTT });
   if (voiceCard.visible) setVoiceText(lastVoiceText);  // rescale for AR
   resetPlacementSession();
   setTimeout(() => {
@@ -565,7 +557,7 @@ renderer.xr.addEventListener('sessionstart', () => {
     else flashPrompt((Object.keys(layoutData.laptops || {}).length
       ? 'Saved table layout found: hold squeeze (or press A/X) to re-place the reference laptops'
       : 'Hold squeeze (or press A/X) to place the laptops on your real table'
-      ) + (voiceOn ? '\nHold B/Y to talk to OnlyVibes' : ''), 6000);
+      ) + (voiceOn ? '\nVoice: select an agent, hold B/Y, speak its new prompt' : ''), 6000);
   }, 600);
 });
 renderer.xr.addEventListener('sessionend', () => {
@@ -632,124 +624,125 @@ function pollSticks(dt) {
 // with every control request (query param + X-OV-Key header)
 const CONTROL_KEY = new URLSearchParams(location.search).get('key') || '';
 
-// ---------------------------------------------------------------- voice (web/voice.js, Ron's voice-integration)
-// This page is the headset ("browser" role); /mic is the fallback mic ("web" role) on a laptop/phone.
-// Push-to-talk in AR: HOLD B/Y (xr-standard gamepad button 5). Not A/X (4) or stick click (3): those toggle
-// Place laptops; trigger selects cards and squeeze summons the scene. ?ptt=<button index>|trigger overrides.
+// ---------------------------------------------------------------- voice prompt (web/voice.js, STT only)
+// Select an agent card (trigger / click) = voice target. Hold B/Y (xr-standard gamepad button 5) and speak;
+// on release Voxtral transcribes it, the card shows the transcript for 2 s (press B/Y again to cancel), then
+// POST /api/control action=redirect interrupts that agent and sends the transcript as its new prompt.
+// Not A/X (4) or stick click (3): those toggle Place laptops. ?ptt=<button index>|trigger overrides.
+// Desktop / phone: the "Hold to talk" button or hold Space.
 const vparams = new URLSearchParams(location.search);
-const ROLE = vparams.get('role') === 'web' ? 'web' : 'browser';
-const CLIENT_ID = crypto.randomUUID?.() || String(Math.random()).slice(2);
 const PTT = vparams.get('ptt') || '5';
+const SEND_DELAY_MS = 2000;
 const voice = window.OnlyVibesVoice || null;
 const voicebar = document.getElementById('voicebar');
 const voiceEnable = document.getElementById('voiceEnable');
 const voiceTalk = document.getElementById('voiceTalk');
-const micToggle = document.getElementById('micToggle');
-const speakerSel = document.getElementById('speakerSel');
-let lastVoiceId = null, voiceOn = false;
-const VKEY_HEADERS = { 'Content-Type': 'application/json', ...(CONTROL_KEY ? { 'X-OV-Key': CONTROL_KEY } : {}) };
-
-function cfgLine(c) { return `[mic: ${c.mic ?? '?'} · speaker: ${c.speaker ?? '?'} · this: ${ROLE}]`; }
-function renderConfig(c) {
-  if (!c) return;
-  micToggle.textContent = `mic: ${c.mic ?? '?'}${c.mic === ROLE ? ' (this)' : ''}`;
-  speakerSel.value = c.speaker ?? 'browser';
-}
-async function postConfig(body) {
-  try {
-    const r = await fetch('/api/voice/config', { method: 'POST', headers: VKEY_HEADERS, body: JSON.stringify(body) });
-    if (r.status === 403) { setVoiceText('voice locked: open /ar?key=…', 'error'); return null; }
-    if (!r.ok) return null;
-    const c = await r.json();
-    voice?.setConfig(c); renderConfig(c);
-    return c;
-  } catch { return null; }
-}
+let voiceOn = false, pendingSend = null, voiceHold = 0;
 fetch('/api/voice/health').then((r) => (r.ok ? r.json() : null)).then((h) => {
-  if (h && h.voice && voice) {
-    voiceOn = true;
-    voicebar.style.display = 'flex';
-    voice.setConfig(h.config); renderConfig(h.config);
-  }
+  if (h && h.voice && voice) { voiceOn = true; voicebar.style.display = 'flex'; }
 }).catch(() => {});
+
+function targetOf(sel) {
+  if (!sel) return null;
+  const a = sel.card.userData.agent, g = sel.card.userData.group;
+  return { laptop: sel.laptopKey, agent: a.name, task_id: a.task_id || '', owner: (g && g.userData.owner) || '?' };
+}
+const targetLine = (t) => `Voice target: ${t.agent} on ${t.owner}'s laptop`;
+function showVoiceTarget() {  // called when a card is selected
+  if (!voiceOn) return;
+  const t = targetOf(selected);
+  if (t) setVoiceText(`${targetLine(t)}\nhold ${PTT === 'trigger' ? 'trigger' : 'B/Y'} (or Space) and speak a new prompt`, 'ready', 6000);
+}
+window.__showVoiceTarget = showVoiceTarget;
+
+async function sendRedirect(t, text) {
+  setVoiceText(`${targetLine(t)}\n“${text}”\nsending…`, 'thinking', 15000);
+  try {
+    const res = await fetch('api/control', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(CONTROL_KEY ? { 'X-OV-Key': CONTROL_KEY } : {}) },
+      body: JSON.stringify({ laptop: t.laptop, agent: t.agent, task_id: t.task_id, action: 'redirect', text }) });
+    if (res.status === 403) return setVoiceText('locked: open /ar?key=…', 'error');
+    const body = await res.json().catch(() => ({}));
+    const msg = body.message || (body.error && body.error.message) || `HTTP ${res.status}`;
+    setVoiceText(`${body.ok ? `Sent to ${t.owner}'s ${t.agent}` : 'Not sent'}\n${msg}`, body.ok ? 'speaking' : 'error', 8000);
+  } catch { setVoiceText('could not reach the hub', 'error'); }
+}
+function cancelPending() {
+  if (!pendingSend) return false;
+  clearTimeout(pendingSend.timer); pendingSend = null;
+  setVoiceText('cancelled: nothing sent', 'error', 3000);
+  return true;
+}
+function onTranscript(text) {
+  const t = targetOf(selected);
+  if (!t) return setVoiceText(`Select an agent first\n(heard: “${text}”)`, 'error', 6000);
+  setVoiceText(`${targetLine(t)}\n“${text}”\nsending in 2 s… press ${PTT === 'trigger' ? 'trigger' : 'B/Y'} to cancel`, 'thinking', 4000);
+  pendingSend = { timer: setTimeout(() => { pendingSend = null; sendRedirect(t, text); }, SEND_DELAY_MS) };
+}
+// press = cancel a pending send, else start talking; release = stop and transcribe
+function pttDown() {
+  if (cancelPending()) { voiceHold = 2; return; }  // 2 = this press only cancelled
+  if (!selected) { voiceHold = 0; return setVoiceText('Select an agent first', 'error', 4000); }
+  voiceHold = 1;
+  voice?.begin();
+}
+function pttUp() { if (voiceHold === 1) voice?.end(); voiceHold = 0; }
+
 voiceEnable.onclick = async () => {
   const ok = await voice?.enable();
   voiceEnable.style.display = 'none';
   voiceTalk.style.display = '';
-  if (!ok) setVoiceText('no mic here: use /mic on a laptop (replies still play in this headset)', 'error', 9000);
+  if (!ok) setVoiceText('no mic here: use /mic on a laptop', 'error', 9000);
 };
-voiceTalk.addEventListener('pointerdown', (e) => {
-  e.preventDefault();
-  try { voiceTalk.setPointerCapture(e.pointerId); } catch {}
-  voice?.begin();
-});
-voiceTalk.addEventListener('pointerup', () => voice?.end());
-voiceTalk.addEventListener('pointercancel', () => voice?.end());
+voiceTalk.addEventListener('pointerdown', (e) => { e.preventDefault(); try { voiceTalk.setPointerCapture(e.pointerId); } catch {} pttDown(); });
+voiceTalk.addEventListener('pointerup', pttUp);
+voiceTalk.addEventListener('pointercancel', pttUp);
 addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !e.repeat && voiceOn && e.target === document.body) { e.preventDefault(); voice?.begin(); }
+  if (e.code === 'Space' && !e.repeat && voiceOn && e.target === document.body) { e.preventDefault(); pttDown(); }
 });
-addEventListener('keyup', (e) => { if (e.code === 'Space' && voiceOn) voice?.end(); });
-micToggle.onclick = () => { postConfig({ toggle: 'mic' }); };
-speakerSel.onchange = () => { postConfig({ speaker: speakerSel.value }); };
+addEventListener('keyup', (e) => { if (e.code === 'Space' && voiceOn) pttUp(); });
 
 // head-locked voice card: on the scene (not the scaled world), follows the camera
 const VOICE_BG = { ready: 'rgba(20,16,40,0.92)', listening: 'rgba(48,22,66,0.94)', thinking: 'rgba(56,40,10,0.94)',
-  speaking: 'rgba(12,38,26,0.94)', error: 'rgba(64,16,16,0.94)', off: 'rgba(20,16,40,0.92)' };
+  speaking: 'rgba(12,38,26,0.94)', error: 'rgba(64,16,16,0.94)' };
 const voiceCard = makeCard({ fontPx: 22, bg: VOICE_BG.ready, fg: '#ece6ff' });
 voiceCard.visible = false;
 voiceCard.renderOrder = 999;
 scene.add(voiceCard);
-let lastVoiceText = '', voiceHideTimer = null, voiceBaseScale = null;
+let lastVoiceText = '', voiceHideTimer = null;
 function setVoiceText(t, state = 'ready', holdMs = 8000) {
   lastVoiceText = t;
   voiceCard.userData.bg = VOICE_BG[state] || VOICE_BG.ready;
-  voiceCard.userData.drawn = '';  // bg changed: force a redraw
+  voiceCard.userData.drawn = '';  // bg may have changed: force a redraw
   setCardText(voiceCard, t);
   if (renderer.xr.isPresenting) voiceCard.scale.multiplyScalar(0.25);
   voiceCard.visible = true;
   if (voiceHideTimer) clearTimeout(voiceHideTimer);
   voiceHideTimer = setTimeout(() => { voiceCard.visible = false; }, holdMs);
 }
-const VOICE_HEAD = { ready: '🎙 ready', listening: '🎙 listening…', thinking: '🤔 thinking…',
-  speaking: '🔊 speaking…', error: '⚠ voice error', off: 'voice off' };
 voice?.init({
-  role: ROLE,
-  clientId: CLIENT_ID,
+  role: 'ar',
   onUpdate: (u) => {
-    const state = u.state || 'ready';
-    const lines = [cfgLine(u.config || {}), VOICE_HEAD[state] || state];
-    if (u.status && state === 'error') lines.push(u.status);
-    if (u.heard) lines.push('you: ' + u.heard);
-    if (u.reply) lines.push('→ ' + u.reply);
-    setVoiceText(lines.join('\n'), state);
-    const listening = state === 'listening';
+    const listening = u.state === 'listening';
     voiceTalk.textContent = listening ? 'Release to send' : 'Hold to talk';
     voiceTalk.classList.toggle('holding', listening);
+    const t = targetOf(selected);
+    if (listening || (u.state === 'thinking' && !pendingSend)) {
+      setVoiceText(`${t ? targetLine(t) : 'no target selected'}\n${listening ? '🎙 listening…' : 'transcribing…'}${u.heard ? `\n“${u.heard}”` : ''}`,
+        listening ? 'listening' : 'thinking', 30000);
+    } else if (u.state === 'error') setVoiceText(`voice error: ${u.status}`, 'error');
   },
-  onBlocked: (why) => setVoiceText(`voice blocked: ${why}` + (ROLE === 'browser' ? ' (tap mic toggle, or talk on /mic)' : ''), 'error'),
+  onTranscript,
+  onBlocked: (why) => setVoiceText(`voice: ${why}`, 'error'),
 });
-// called with every /view frame: shared config + turns spoken elsewhere (e.g. the /mic page)
-function applyVoice(snap) {
-  if (snap.voice_config) { voice?.setConfig(snap.voice_config); renderConfig(snap.voice_config); }
-  if (snap.voice && snap.voice.id && snap.voice.id !== lastVoiceId) {
-    const first = lastVoiceId === null;
-    lastVoiceId = snap.voice.id;
-    if (!first && snap.voice.client_id !== CLIENT_ID) {
-      setVoiceText([cfgLine(snap.voice_config || {}), 'you: ' + (snap.voice.heard || ''), '→ ' + (snap.voice.reply || '')].join('\n'));
-      if (snap.voice.source_role !== ROLE && (snap.voice.speak_on || []).includes(ROLE)) voice?.speak(snap.voice.reply);
-    }
-  }
-}
-window.__applyVoice = applyVoice;
-let pttDown = false;
+let pttPadDown = false;
 function pollVoiceButtons() {
   const xs = renderer.xr.getSession();
-  if (!xs || PTT === 'trigger') { if (pttDown) voice?.end(); pttDown = false; return; }
+  if (!xs || PTT === 'trigger') return;
   let pressed = false;
   for (const src of xs.inputSources) if (src.gamepad?.buttons[+PTT]?.pressed) pressed = true;
-  if (pressed && !pttDown) voice?.begin();
-  if (!pressed && pttDown) voice?.end();
-  pttDown = pressed;
+  if (pressed && !pttPadDown) pttDown();
+  if (!pressed && pttPadDown) pttUp();
+  pttPadDown = pressed;
 }
 const _vP = new THREE.Vector3(), _vF = new THREE.Vector3(), _vQ = new THREE.Quaternion();
 function updateVoiceCard(cam) {
@@ -826,6 +819,7 @@ function openPanel(card) {
   if (selected) selected.card.material.color.set(0xffffff);
   selected = { card, ak: card.userData.ak, laptopKey: card.userData.laptopKey };
   card.material.color.set(0xffe680); // highlight
+  window.__showVoiceTarget?.();      // the selected card is also the voice target
   panelMode = 'main';
   card.userData.group.add(panel);
   panel.visible = true;

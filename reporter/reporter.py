@@ -29,6 +29,7 @@ import signal
 import platform
 import socket
 import subprocess
+import threading
 import time
 from getpass import getuser
 
@@ -884,21 +885,104 @@ def handle_control(msg: dict) -> dict:
             return {"ok": False, "message": f"{action} is only supported for Claude Code sessions (type in its terminal)"}
         if proc is not None:
             return {"ok": False, "message": "this session is open in a terminal: type there, or Stop it first and then Resume here"}
-        claude = shutil.which("claude") or next(
-            (os.path.expanduser(c) for c in CLAUDE_BIN_CANDIDATES if os.path.isfile(os.path.expanduser(c))), None)
-        if not claude:
-            return {"ok": False, "message": "claude CLI not found on this laptop"}
-        session_id = os.path.basename(info["log"])[:-6]
-        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
-            return {"ok": False, "message": "unrecognised session id"}
-        prompt = text or "continue"
-        cwd = info["cwd"] if info["cwd"] and os.path.isdir(info["cwd"]) else os.path.expanduser("~")
-        with open(CONTROL_LOG, "ab") as out:
-            subprocess.Popen([claude, "-p", "--resume", session_id, prompt], cwd=cwd, stdin=subprocess.DEVNULL,
-                             stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-        print(f"[reporter] control: resumed {agent} headless")
-        return {"ok": True, "message": f"resumed {agent} headless with: {prompt[:60]}"}
+        return _resume_claude(info, text or "continue", agent)
+    if action == "redirect":
+        return redirect_agent(info, text, agent, proc)
     return {"ok": False, "message": f"unknown action {action!r}"}
+
+
+def _resume_claude(info: dict, prompt: str, agent: str) -> dict:
+    """Continue a Claude Code session headless (`claude -p --resume <id> <prompt>`, argv only)."""
+    claude = shutil.which("claude") or next(
+        (os.path.expanduser(c) for c in CLAUDE_BIN_CANDIDATES if os.path.isfile(os.path.expanduser(c))), None)
+    if not claude:
+        return {"ok": False, "message": "claude CLI not found on this laptop"}
+    session_id = os.path.basename(info.get("log") or "")[:-6]
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
+        return {"ok": False, "message": "unrecognised session id"}
+    cwd = info["cwd"] if info.get("cwd") and os.path.isdir(info["cwd"]) else os.path.expanduser("~")
+    with open(CONTROL_LOG, "ab") as out:
+        subprocess.Popen([claude, "-p", "--resume", session_id, prompt], cwd=cwd, stdin=subprocess.DEVNULL,
+                         stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    print(f"[reporter] control: resumed {agent} headless")
+    return {"ok": True, "message": f"resumed {agent} headless with: {prompt[:60]}"}
+
+
+def _tmux_pane(proc) -> str | None:
+    """tmux pane id (%N) whose tty is the agent's terminal, if it runs inside tmux."""
+    tmux = shutil.which("tmux")
+    try:
+        tty = proc.terminal()
+    except (psutil.Error, OSError):
+        tty = None
+    if not tmux or not tty:
+        return None
+    try:
+        out = subprocess.run([tmux, "list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == tty and re.fullmatch(r"%\d+", parts[1]):
+            return parts[1]
+    return None
+
+
+def _wait_then_resume(proc, info: dict, prompt: str, agent: str) -> None:
+    try:
+        proc.wait(timeout=8)
+    except psutil.TimeoutExpired:
+        print(f"[reporter] control: {agent} did not stop; new prompt not sent")
+        return
+    except psutil.Error:
+        pass
+    _resume_claude(info, prompt, agent)
+
+
+def redirect_agent(info: dict, text: str, agent: str, proc) -> dict:
+    """Voice: interrupt the agent and give it `text` as its new prompt.
+
+    Claude Code in tmux: Esc (interrupt the turn) + type the prompt into its pane, the session stays open.
+    Claude Code elsewhere: Ctrl-C (SIGINT, which ends the CLI), then `claude -p --resume <id> <text>`
+    continues the same conversation headless. Other agents: interrupt only, and say so.
+    """
+    if not text:
+        return {"ok": False, "message": "nothing to send"}
+    who = "its parent session" if info["kind"] == "subagent" else agent
+    if info["agent"] != "claude-code":
+        if proc is None:
+            return {"ok": False, "message": f"{info['agent']} can't take a voice prompt yet: type it in their terminal"}
+        os.kill(proc.pid, signal.SIGINT)
+        print(f"[reporter] control: SIGINT -> {agent} (redirect, no prompt support)")
+        return {"ok": False, "message": f"sent Ctrl-C to {who}, but {info['agent']} can't take a voice prompt "
+                                        "yet: type it in their terminal"}
+    if not info.get("log"):
+        return {"ok": False, "message": "can't find that Claude session's id"}
+    if proc is None:
+        return _resume_claude(info, text, agent)
+    pane = _tmux_pane(proc)
+    if pane:
+        tmux = shutil.which("tmux")
+        subprocess.run([tmux, "send-keys", "-t", pane, "Escape"], timeout=3)
+        time.sleep(0.4)
+        subprocess.run([tmux, "send-keys", "-t", pane, "-l", "--", text], timeout=3)
+        subprocess.run([tmux, "send-keys", "-t", pane, "Enter"], timeout=3)
+        print(f"[reporter] control: redirected {agent} in tmux pane {pane}")
+        return {"ok": True, "message": f"interrupted {who} and sent the new prompt in its terminal"}
+    os.kill(proc.pid, signal.SIGINT)  # Claude Code exits on SIGINT
+    print(f"[reporter] control: SIGINT -> {agent} (redirect)")
+    try:
+        proc.wait(timeout=3)
+    except psutil.TimeoutExpired:  # still shutting down: finish in the background, don't stall reports
+        threading.Thread(target=_wait_then_resume, args=(proc, info, text, agent), daemon=True).start()
+        return {"ok": True, "message": f"interrupting {who}; the new prompt starts when it stops"}
+    except psutil.Error:
+        pass
+    r = _resume_claude(info, text, agent)
+    if r["ok"]:
+        r["message"] = f"interrupted {who} and sent the new prompt (continues headless)"
+    return r
 
 
 def _drain_controls(ws, seconds: float) -> None:

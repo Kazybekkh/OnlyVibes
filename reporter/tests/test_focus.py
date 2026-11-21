@@ -49,3 +49,62 @@ def test_handle_control_focus_routes_and_unknown_card():
     assert "no running process" in r.handle_control({"agent": "x", "action": "focus"})["message"]
     assert r._desktop_app_pid("not-an-agent") == 0
     r._CONTROL.clear()
+
+
+# ---- redirect (voice prompt): interrupt + new prompt, whitelisted paths only
+class FakeProc:
+    def __init__(self, pid=4242, exits=True):
+        self.pid, self.exits, self.waited = pid, exits, 0
+
+    def wait(self, timeout=None):
+        self.waited += 1
+        if not self.exits:
+            raise r.psutil.TimeoutExpired(timeout)
+
+
+CLAUDE = {"agent": "claude-code", "kind": "session", "pid": 4242, "ctime": 0, "cwd": "/tmp",
+          "log": "/x/0b5c1e9a-1111-2222-3333-444455556666.jsonl"}
+
+
+def test_redirect_claude_terminal_sigint_then_resume(monkeypatch):
+    kills, resumed = [], []
+    monkeypatch.setattr(r.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    monkeypatch.setattr(r, "_tmux_pane", lambda proc: None)
+    monkeypatch.setattr(r, "_resume_claude", lambda info, prompt, agent: resumed.append(prompt) or {"ok": True, "message": "x"})
+    out = r.redirect_agent(CLAUDE, "add a test", "claude-code · demo", FakeProc())
+    assert kills == [(4242, r.signal.SIGINT)] and resumed == ["add a test"]
+    assert out["ok"] and "interrupted" in out["message"]
+
+
+def test_redirect_claude_in_tmux_types_into_pane(monkeypatch):
+    calls = []
+    monkeypatch.setattr(r, "_tmux_pane", lambda proc: "%3")
+    monkeypatch.setattr(r.shutil, "which", lambda name: "/usr/bin/tmux" if name == "tmux" else None)
+    monkeypatch.setattr(r.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    monkeypatch.setattr(r.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("no kill in tmux mode")))
+    monkeypatch.setattr(r.time, "sleep", lambda s: None)
+    out = r.redirect_agent(CLAUDE, "rm -rf / ; echo hi", "claude-code · demo", FakeProc())
+    assert out["ok"]
+    assert calls[0] == ["/usr/bin/tmux", "send-keys", "-t", "%3", "Escape"]
+    assert calls[1] == ["/usr/bin/tmux", "send-keys", "-t", "%3", "-l", "--", "rm -rf / ; echo hi"]  # literal text
+    assert calls[2] == ["/usr/bin/tmux", "send-keys", "-t", "%3", "Enter"]
+
+
+def test_redirect_claude_headless_resumes_directly(monkeypatch):
+    resumed = []
+    monkeypatch.setattr(r, "_resume_claude", lambda info, prompt, agent: resumed.append(prompt) or {"ok": True, "message": "x"})
+    assert r.redirect_agent(CLAUDE, "go", "c", None)["ok"] and resumed == ["go"]
+
+
+def test_redirect_other_agents_interrupt_only(monkeypatch):
+    kills = []
+    monkeypatch.setattr(r.os, "kill", lambda pid, sig: kills.append(pid))
+    info = {**CLAUDE, "agent": "codex", "log": ""}
+    out = r.redirect_agent(info, "go", "codex", FakeProc(pid=7))
+    assert out["ok"] is False and kills == [7] and "can't take a voice prompt" in out["message"]
+    assert r.redirect_agent(info, "go", "codex", None)["ok"] is False
+
+
+def test_resume_claude_rejects_bad_session_id(monkeypatch):
+    monkeypatch.setattr(r.shutil, "which", lambda name: "/bin/claude")
+    assert r._resume_claude({**CLAUDE, "log": "/x/../../etc.jsonl"}, "go", "c")["ok"] is False
