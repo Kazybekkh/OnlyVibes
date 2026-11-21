@@ -50,7 +50,7 @@ const timingsEl = document.getElementById("timings");
 let micCtx = null, micStream = null, workletNode = null;
 let sttWs = null, ttsWs = null;
 let audioCtx = null, nextPlayTime = 0;
-let holding = false, turnActive = false, t0 = 0, firstAudio = 0;
+let holding = false, turnActive = false, t0 = 0, firstAudio = 0, audioChunks = 0;
 let endTimer = null, doneFallback = null;
 const history = [];
 
@@ -166,8 +166,9 @@ async function openTts() {
   const opened = new Promise((res, rej) => { ttsWs.onopen = res; ttsWs.onerror = rej; });
   attach(ttsWs, (msg) => {
     if (msg.type === "speech.audio.delta") {
+      audioChunks++;
       if (!firstAudio) { firstAudio = performance.now();
-        timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s`; }
+        timingsEl.textContent = `first audio ${((firstAudio - t0)/1000).toFixed(2)}s | ctx=${audioCtx ? audioCtx.state : "?"} | out=${audioCtx ? audioCtx.destination.channelCount : "?"}ch`; }
       try { playPcm(msg.audio_data); }
       catch (e) { status("audio playback error: " + e.message); console.error(e); }
     } else if (msg.type === "speech.audio.done") {
@@ -236,7 +237,7 @@ function endTurn() {
 async function beginTurn() {
   if (turnActive) return;
   ensureAudio();                      // AudioContext must start inside the gesture
-  turnActive = true; holding = true; firstAudio = 0; t0 = performance.now();
+  turnActive = true; holding = true; firstAudio = 0; audioChunks = 0; t0 = performance.now();
   transcriptEl.textContent = ""; replyEl.textContent = ""; timingsEl.textContent = "";
   pad.classList.add("holding"); pad.textContent = "Listening…";
   status("transcribing live…");
