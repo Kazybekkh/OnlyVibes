@@ -38,7 +38,24 @@ class MistralAPIError(RuntimeError):
         super().__init__(f"Mistral API error (status={status}): {body[:500]}")
 
 
+def load_dotenv(path: str = ".env") -> None:
+    """Load KEY=VALUE lines from a .env file (stdlib-only; never overrides
+    variables already set in the environment)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def _api_key() -> str:
+    load_dotenv()
     key = os.environ.get("MISTRAL_API_KEY")
     if not key:
         raise MistralAPIError(
@@ -108,7 +125,13 @@ def _post_multipart(path: str, fields: Dict[str, str],
 
 def _post_audio(path: str, payload: Dict[str, Any],
                 timeout: float = 120.0) -> tuple[bytes, str]:
-    """POST JSON, expect binary audio back. Returns (bytes, content_type)."""
+    """POST JSON, expect audio back. Returns (bytes, content_type).
+
+    The speech endpoint answers either raw binary audio or a JSON envelope
+    {"audio_data": "<base64>", "content_type"?: ...}; both are handled.
+    """
+    import base64
+
     req = urlrequest.Request(
         f"{API_BASE}{path}",
         data=json.dumps(payload).encode("utf-8"),
@@ -120,11 +143,20 @@ def _post_audio(path: str, payload: Dict[str, Any],
     )
     try:
         with urlrequest.urlopen(req, timeout=timeout) as resp:
-            return resp.read(), resp.headers.get("Content-Type", "audio/wav")
+            body = resp.read()
+            content_type = resp.headers.get("Content-Type", "audio/wav")
     except HTTPError as e:
         raise MistralAPIError(e.code, e.read().decode("utf-8", "replace")) from e
     except URLError as e:
         raise MistralAPIError(None, str(e)) from e
+
+    if "json" in content_type:
+        data = json.loads(body.decode("utf-8"))
+        b64 = data.get("audio_data") or data.get("audio")
+        if not b64:
+            raise MistralAPIError(None, f"no audio in response: {str(data)[:200]}")
+        return base64.b64decode(b64), data.get("content_type", "audio/mpeg")
+    return body, content_type
 
 
 def _ext_for(content_type: str) -> str:
@@ -174,13 +206,20 @@ class VoxtralTTS:
         self.model = model
         self.voice_id = voice_id
 
-    def synthesize(self, text: str,
-                   voice_id: Optional[str] = None) -> Utterance:
+    def synthesize(self, text: str, voice_id: Optional[str] = None,
+                   response_format: Optional[str] = None) -> Utterance:
         payload: Dict[str, Any] = {"model": self.model, "input": text}
         vid = voice_id if voice_id is not None else self.voice_id
         if vid:
             payload["voice_id"] = vid
+        if response_format:
+            payload["response_format"] = response_format
         audio, content_type = _post_audio("/audio/speech", payload)
+        if response_format:  # server JSON envelope may not label the format
+            content_type = {
+                "wav": "audio/wav", "mp3": "audio/mpeg", "pcm": "audio/pcm",
+                "flac": "audio/flac", "ogg": "audio/ogg",
+            }.get(response_format, content_type)
         return Utterance(
             text=text,
             audio=audio,
