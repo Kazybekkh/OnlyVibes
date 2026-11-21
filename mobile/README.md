@@ -17,8 +17,11 @@ npm install
 npx expo start          # then press "i" for the iOS simulator (or scan QR in Expo Go)
 ```
 
-In **Settings** set the hub URL (e.g. `http://100.64.0.11:8000` — the Tailscale
-IP of the laptop running the server) or toggle **Demo mode** for fake data.
+The app defaults to the team hub **`http://100.107.184.10:8000`** (Kazybek's
+MacBook over Tailscale, per `shared/PROTOCOL.md`). Change it in **Settings**
+(any `http(s)://host:port` — the Tailscale IP of the laptop running the hub),
+or toggle **Demo mode** for fake data. Override the default at start with
+`EXPO_PUBLIC_SERVER_URL=http://<hub>:8000 npx expo start`.
 
 ```bash
 # hub (on one laptop)

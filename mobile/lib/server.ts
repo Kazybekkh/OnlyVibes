@@ -10,8 +10,10 @@ export interface ServerConfig {
   nonce: number;
 }
 
+// Team hub over Tailscale (shared/PROTOCOL.md); override with
+// EXPO_PUBLIC_SERVER_URL or in the Settings tab.
 const DEFAULT_URL =
-  (process.env.EXPO_PUBLIC_SERVER_URL as string | undefined) ?? 'http://localhost:8000';
+  (process.env.EXPO_PUBLIC_SERVER_URL as string | undefined) ?? 'http://100.107.184.10:8000';
 
 let config: ServerConfig = { url: DEFAULT_URL, demo: false, nonce: 0 };
 const listeners = new Set<() => void>();
