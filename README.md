@@ -120,8 +120,30 @@ Humans can join the conversation from the "Agent chatter" rail or from a task's 
 | `AUTO_MERGE`      | worker   | `1`                        | squash-merge PRs automatically; `0` leaves them in Review |
 | `AGENT_TIMEOUT`   | worker   | `3600`                     | max seconds per agent run                           |
 | `MOCK_SPEED`      | worker   | `1`                        | speed multiplier for mock agents                    |
+| `VOICE_MIC`       | server   | `browser`                  | which role may talk: `browser` (Zapbox headset phone) or `web` (fallback `/mic` page) |
+| `VOICE_SPEAKER`   | server   | `browser`                  | where replies are spoken: `browser`, `web`, `mic` (same as mic), or `all` |
+| `VOICE_CHAT_MODEL`| server   | `MISTRAL_MODEL`            | LLM behind `/api/voice/chat` (grounded in the live snapshot) |
+| `MISTRAL_API_BASE`| server   | `https://api.mistral.ai/v1`| Mistral API base (token mint + chat + SSE)              |
 
 All worker variables are documented in `worker/worker.py`'s docstring, and all server variables in `server/main.py`'s.
+
+## Voice in Zapbox Browser (AR)
+
+The headset (Zapbox, iPhone inside) opens `/ar`, taps **🎙 Enable voice** before **Enter AR**, then **holds B/Y**
+(xr-standard gamepad button 5) to ask out loud ("what is Carlo's Claude doing?", "is anyone stuck?") and hears a
+spoken answer grounded in the live agent data, with a head-locked "you said / reply" card.
+
+- Links (add `?key=<OV_CONTROL_SECRET>` when the hub sets one; token/chat/turn/config POSTs need it):
+  `https://<hub>/ar?key=…` (headset), `https://<hub>/mic?key=…` (fallback mic), `https://<hub>/probe` (capability probe).
+- Push-to-talk: **hold B/Y** in AR. A/X and stick click stay "Place laptops", trigger selects cards, squeeze summons
+  the scene. Desktop / phone: the **Hold to talk** button (bottom right) or hold **Space**. `?ptt=<button index>`
+  or `?ptt=trigger` overrides.
+- Fallback when the headset mic doesn't work: open `/mic?key=…` on a laptop or phone and hold to talk there (it takes
+  the mic automatically, `mic=web`); with `speaker: headset` (default) the reply is spoken in the headset.
+- The voice bar's mic toggle and speaker menu switch roles at runtime (`POST /api/voice/config`).
+- The browser never sees the Mistral key: `/api/voice/token` mints short-lived `rt_*` tokens and the page talks to
+  the Voxtral realtime STT/TTS websockets directly (`voxtral-mini-transcribe-realtime-3` / `voxtral-mini-tts-3-0`).
+- Plan and probe notes: `voice/ZAPBOX_VOICE_PLAN.md`, `voice/ZAPBOX_PROBE.md`. Server side: `server/voice.py`.
 
 ## v1 reporter schema (`shared/schema.json`, 3D tab)
 

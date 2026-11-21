@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>OnlyVibes — capability probe</title>
+<style>
+  html, body {
+    margin: 0; min-height: 100%; background: #0b0e14; color: #e8ecf3;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body { display: flex; flex-direction: column; align-items: center; padding: 16px; gap: 12px; }
+  h1 { font-size: 18px; margin: 4px 0; letter-spacing: .5px; }
+  #btns { display: flex; flex-direction: column; gap: 12px; width: min(320px, 90vw); }
+  #btns button {
+    padding: 18px 22px; border-radius: 14px; border: 0; cursor: pointer;
+    background: #7dd3fc; color: #08222f; font: 600 18px/1 ui-sans-serif, system-ui, sans-serif;
+    touch-action: manipulation;
+  }
+  #btns button:active { transform: scale(0.97); }
+  #btns button:disabled { opacity: .4; }
+  #log {
+    width: min(640px, 94vw); flex: 1; min-height: 40vh; margin: 0; padding: 10px;
+    overflow: auto; background: #11151f; border: 1px solid #22304a; border-radius: 10px;
+    font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #9fb4d8;
+    white-space: pre-wrap; word-break: break-all;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<h1>OnlyVibes — capability probe</h1>
+<div id="btns">
+  <button id="bMic">1. Mic</button>
+  <button id="bAR">2. Enter AR</button>
+  <button id="bBeep">3. Beep</button>
+</div>
+<pre id="log"></pre>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- log (DOM + server)
+const pre = document.getElementById('log');
+const log = (o) => {
+  pre.textContent += JSON.stringify(o) + '\n';
+  pre.scrollTop = pre.scrollHeight;
+  fetch('/api/voice/log', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ probe: true, t: Date.now(), ...o }) }).catch(() => {});
+};
+
+// ---------------------------------------------------------------- on-load capabilities
+(async () => {
+  const caps = {
+    ev: 'load',
+    isSecureContext,
+    userAgent: navigator.userAgent,
+    hasXR: !!navigator.xr,
+    hasGUM: !!navigator.mediaDevices?.getUserMedia,
+  };
+  try { caps.arSupported = await navigator.xr?.isSessionSupported('immersive-ar'); }
+  catch (e) { caps.arSupported = 'err: ' + e.message; }
+  log(caps);
+})();
+
+// ---------------------------------------------------------------- shared audio helpers
+let micStream = null, micCtx = null, micAnalyser = null;   // step-1 stream stays open
+
+function beep(ctx, freq = 440, secs = 0.2) {
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.frequency.value = freq;
+  g.gain.setValueAtTime(0.2, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + secs);
+  osc.connect(g).connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + secs);
+}
+
+// average RMS over `ms` of the analyser's time-domain data
+function measureRms(analyser, ms) {
+  return new Promise((res) => {
+    const buf = new Float32Array(analyser.fftSize);
+    const start = performance.now();
+    let sum = 0, n = 0;
+    (function tick() {
+      analyser.getFloatTimeDomainData(buf);
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      n += buf.length;
+      if (performance.now() - start < ms) setTimeout(tick, 50);
+      else res(Math.sqrt(sum / n));
+    })();
+  });
+}
+
+// ---------------------------------------------------------------- button 1: mic
+document.getElementById('bMic').onclick = async () => {
+  if (micStream) { log({ ev: 'mic', note: 'stream already open' }); return; }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log({ ev: 'mic', ok: true });
+  } catch (err) {
+    log({ ev: 'mic', ok: false, err: err.name + ': ' + err.message });
+    return;
+  }
+  try {
+    micCtx = new AudioContext({ sampleRate: 16000 });
+    await micCtx.resume();
+    log({ ev: 'audioctx', sampleRate: micCtx.sampleRate, state: micCtx.state });
+  } catch (err) {
+    log({ ev: 'audioctx', err: err.name + ': ' + err.message });
+    return;
+  }
+  const src = micCtx.createMediaStreamSource(micStream);
+  micAnalyser = micCtx.createAnalyser();
+  micAnalyser.fftSize = 2048;
+  src.connect(micAnalyser);
+  const rms = await measureRms(micAnalyser, 1000);
+  log({ ev: 'mic-rms-1s', rms: +rms.toFixed(4) });
+};
+
+// ---------------------------------------------------------------- button 2: enter AR
+let xrSession = null;
+document.getElementById('bAR').onclick = async () => {
+  if (xrSession) { log({ ev: 'ar', note: 'session already active' }); return; }
+  if (!navigator.xr) { log({ ev: 'ar', ok: false, err: 'no navigator.xr' }); return; }
+  try {
+    xrSession = await navigator.xr.requestSession('immersive-ar',
+      { optionalFeatures: ['local-floor', 'hit-test'] });
+  } catch (err) {
+    log({ ev: 'ar', ok: false, err: err.name + ': ' + err.message });
+    return;
+  }
+  log({ ev: 'ar', ok: true, enabledFeatures: xrSession.enabledFeatures });
+  window.startARSession?.(xrSession);   // three.js module (below) starts the render loop
+
+  // input sources, logged only when the mapping changes
+  let lastSrcs = '';
+  setInterval(() => {
+    if (!xrSession) return;
+    const srcs = [...xrSession.inputSources].map(s => ({
+      handedness: s.handedness, profiles: s.profiles, mode: s.targetRayMode,
+      buttons: s.gamepad?.buttons.map(b => b.pressed) }));
+    const j = JSON.stringify(srcs);
+    if (j !== lastSrcs) { lastSrcs = j; log({ ev: 'inputs', srcs }); }
+  }, 1000);
+
+  xrSession.addEventListener('selectstart', async () => {
+    log({ ev: 'selectstart' });
+    // does select count as a user gesture for getUserMedia?
+    try {
+      const s2 = await navigator.mediaDevices.getUserMedia({ audio: true });
+      log({ ev: 'selectstart-gum', ok: true, audioTracks: s2.getAudioTracks().length });
+      s2.getTracks().forEach(t => t.stop());   // probe only; step-1 stream stays the live one
+    } catch (err) {
+      log({ ev: 'selectstart-gum', ok: false, err: err.name + ': ' + err.message });
+    }
+  });
+  xrSession.addEventListener('selectend', () => {
+    if (micCtx) { beep(micCtx); log({ ev: 'selectend-beep', state: micCtx.state }); }
+    else log({ ev: 'selectend-beep', err: 'no audio ctx — tap "1. Mic" first' });
+  });
+
+  // does the step-1 mic survive inside AR?
+  setInterval(async () => {
+    if (micAnalyser && micCtx && xrSession)
+      log({ ev: 'ar-mic-rms', rms: +(await measureRms(micAnalyser, 500)).toFixed(4), state: micCtx.state });
+  }, 2000);
+
+  xrSession.addEventListener('end', () => { log({ ev: 'ar-end' }); xrSession = null; });
+};
+
+// ---------------------------------------------------------------- button 3: beep (outside AR)
+document.getElementById('bBeep').onclick = () => {
+  if (micCtx) { beep(micCtx); log({ ev: 'beep', state: micCtx.state }); }
+  else log({ ev: 'beep', err: 'no audio ctx — tap "1. Mic" first' });
+};
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// minimal render loop so the AR session stays alive (same import map as index.html)
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e14);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 1.6, 0);
+scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+const grid = new THREE.GridHelper(10, 10, 0x22304a, 0x131a29);
+scene.add(grid);
+const box = new THREE.Mesh(
+  new THREE.BoxGeometry(0.3, 0.3, 0.3),
+  new THREE.MeshStandardMaterial({ color: 0x7dd3fc })
+);
+box.position.set(0, 1, -1);
+scene.add(box);
+
+renderer.setAnimationLoop(() => {
+  box.rotation.y += 0.01;
+  renderer.render(scene, camera);
+});
+
+// called by the classic script above when "2. Enter AR" gets a session
+window.startARSession = (session) => { renderer.xr.setSession(session); };
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

@@ -43,7 +43,12 @@ Endpoints:
     POST /api/layout -> replace it (control key required), saved to data/layout.json
   Static
     GET  /           -> web/index.html (kanban board)
-    GET  /ar         -> web/ar.html (old Three.js / WebXR view)
+    GET  /ar         -> web/ar.html (Three.js / WebXR view, with voice)
+    GET  /mic        -> web/mic.html (fallback voice mic page, role=web)
+    GET  /probe      -> web/probe.html (Zapbox capability probe)
+  Voice (server/voice.py; token/chat/turn/config POST need the control key)
+    POST /api/voice/token | /api/voice/chat | /api/voice/turn | /api/voice/log
+    GET|POST /api/voice/config, GET /api/voice/health; /view also carries "voice" + "voice_config"
     GET  /<file>     -> anything else in web/ (board.js, board.css, ...)
 
 Errors are JSON: {"error": {"code": "...", "message": "..."}} with a 4xx status.
@@ -93,6 +98,7 @@ from hub import Hub, WorkerConn
 from legacy import summarize
 from models import ApiError, now
 from peers import Peer, serve_peer
+from voice import make_router
 
 INBOX_MAX_WAIT = 60.0
 
@@ -493,6 +499,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         os.replace(tmp, layout_path)
         return layout_state
 
+    # ---------------------------------------------------------------- voice (Ron's voice-integration)
+    voice_router, voice_state = make_router(settings, hub, require_control_key, now)
+    app.include_router(voice_router)
+
     @app.websocket("/view")
     async def ws_view(websocket: WebSocket) -> None:
         """Broadcast the full laptop-state snapshot to every viewer, 2x per second."""
@@ -503,7 +513,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 async with hub.lock:
                     t = now()
                     msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t),
-                                      "layout": layout_state})
+                                      "layout": layout_state,
+                                      "voice": voice_state.turn, "voice_config": voice_state.config})
                 await websocket.send_text(msg)
                 await asyncio.sleep(0.5)
         except (WebSocketDisconnect, RuntimeError):
@@ -531,6 +542,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ar", include_in_schema=False)
     async def ar():
         return _page("ar.html")
+
+    @app.get("/mic", include_in_schema=False)
+    async def mic_page():
+        return _page("mic.html")  # fallback mic (role=web), e.g. the laptop browser
+
+    @app.get("/probe", include_in_schema=False)
+    async def probe_page():
+        return _page("probe.html")  # Zapbox capability probe
 
     # LAST: everything else under / resolves to web/ (board.js, board.css, ar.html, ...)
     if web_dir.is_dir():

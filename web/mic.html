@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>OnlyVibes — fallback mic</title>
+<style>
+  html, body {
+    margin: 0; min-height: 100%; background: #0b0e14; color: #e8ecf3;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body {
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; padding: 16px; box-sizing: border-box;
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .5px; opacity: .85; }
+  #controls { display: flex; gap: 8px; }
+  #controls button, #controls select {
+    padding: 10px 14px; border-radius: 999px; border: 1px solid #22304a; cursor: pointer;
+    background: #11151f; color: #e8ecf3; font: 600 13px/1 ui-sans-serif, system-ui, sans-serif;
+  }
+  #talk {
+    width: min(260px, 70vw); height: min(260px, 70vw); border-radius: 50%; border: 0; cursor: pointer;
+    background: #7dd3fc; color: #08222f; font: 600 20px/1.2 ui-sans-serif, system-ui, sans-serif;
+    user-select: none; touch-action: none;
+  }
+  #talk.holding { background: #f87171; color: #2f0808; }
+  #talk:disabled { opacity: .4; cursor: default; }
+  .line { width: min(560px, 92vw); min-height: 1.4em; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; opacity: .55; }
+  #heard { color: #e8ecf3; }
+  #reply { color: #86efac; }
+  #status { font-size: 13px; opacity: .75; min-height: 1.2em; text-align: center; }
+</style>
+</head>
+<body>
+<h1>OnlyVibes — fallback mic (role web)</h1>
+<div id="controls">
+  <button id="micToggle">mic: ?</button>
+  <select id="speakerSel">
+    <option>browser</option><option>web</option><option>mic</option><option>all</option>
+  </select>
+</div>
+<button id="talk">Hold to talk</button>
+<div class="line"><div class="label">Heard</div><div id="heard"></div></div>
+<div class="line"><div class="label">Reply</div><div id="reply"></div></div>
+<div id="status">connecting…</div>
+
+<script src="voice.js"></script>
+<script>
+"use strict";
+const ROLE = 'web';
+const CLIENT_ID = crypto.randomUUID?.() || String(Math.random()).slice(2);
+
+const voice = window.OnlyVibesVoice;
+const $ = (id) => document.getElementById(id);
+const talk = $('talk'), heardEl = $('heard'), replyEl = $('reply'), statusEl = $('status');
+const micToggle = $('micToggle'), speakerSel = $('speakerSel');
+const setStatus = (s) => { statusEl.textContent = s; };
+
+// ---------------------------------------------------------------- config controls
+let curCfg = null;
+function renderConfig(c) {
+  if (!c) return;
+  curCfg = c;
+  micToggle.textContent = `mic: ${c.mic}${c.mic === ROLE ? ' (this)' : ''}`;
+  speakerSel.value = c.speaker;
+}
+const OV_KEY = new URLSearchParams(location.search).get('key') || '';
+const postConfig = (body) => fetch('/api/voice/config', { method: 'POST',
+  headers: OV_KEY ? {'Content-Type':'application/json', 'X-OV-Key': OV_KEY} : {'Content-Type':'application/json'},
+  body: JSON.stringify(body) })
+  .then(r => r.json()).then(c => { voice?.setConfig(c); renderConfig(c); return c; })
+  .catch(() => {});
+micToggle.onclick = () => postConfig({ toggle: 'mic' });
+speakerSel.onchange = (e) => postConfig({ speaker: e.target.value });
+
+// ---------------------------------------------------------------- voice module
+if (!voice) {
+  setStatus('voice.js not loaded');
+} else {
+  voice.init({ role: ROLE, clientId: CLIENT_ID,
+    onUpdate: (u) => {
+      heardEl.textContent = u.heard;
+      replyEl.textContent = u.reply;
+      if (u.status) setStatus(u.status);
+      if (u.config) renderConfig(u.config);
+      talk.classList.toggle('holding', u.state === 'listening');
+      talk.textContent = u.state === 'listening' ? 'Listening…'
+                       : u.state === 'speaking' ? 'Interrupt' : 'Hold to talk';
+    },
+    onBlocked: (why) => setStatus(why),
+  });
+}
+
+// first tap enables (mic permission), then hold-to-talk
+let enabled = false, enabling = false;
+talk.addEventListener('pointerdown', async (e) => {
+  e.preventDefault();
+  try { talk.setPointerCapture(e.pointerId); } catch {}
+  if (!voice) return;
+  if (!enabled && !enabling) {
+    enabling = true; talk.disabled = true;
+    setStatus('enabling voice… (allow the microphone)');
+    enabled = await voice.enable();
+    talk.disabled = false; enabling = false;
+    if (!enabled) { setStatus('voice enable failed'); return; }
+  }
+  // talking on the fallback page means "this is the mic now" (the headset mic may not work)
+  if (curCfg && curCfg.mic !== ROLE) {
+    const c = await postConfig({ mic: ROLE });
+    if (!c) { setStatus('could not take the mic: open /mic?key=<control key>'); return; }
+  }
+  voice.begin();
+});
+talk.addEventListener('pointerup', () => voice?.end());
+talk.addEventListener('pointercancel', () => voice?.end());
+
+// ---------------------------------------------------------------- WS /view: config + remote turns
+let lastVoiceId = null;
+let gotReal = false;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  const ws = new WebSocket(proto + location.host + '/view');
+  ws.onopen = () => { gotReal = true; setStatus('live'); };
+  ws.onmessage = (ev) => {
+    gotReal = true;
+    let snap;
+    try { snap = JSON.parse(ev.data); } catch { return; }
+    if (snap.voice_config) { voice?.setConfig(snap.voice_config); renderConfig(snap.voice_config); }
+    const vt = snap.voice;
+    if (vt?.id && vt.id !== lastVoiceId) {
+      const first = lastVoiceId === null;
+      lastVoiceId = vt.id;
+      if (!first && vt.client_id !== CLIENT_ID) {
+        heardEl.textContent = `${vt.source_role}: ${vt.heard}`;
+        replyEl.textContent = vt.reply;
+        if (vt.source_role !== ROLE && (vt.speak_on || []).includes(ROLE)) voice?.speak(vt.reply);
+      }
+    }
+  };
+  ws.onclose = () => { if (!gotReal) setStatus('no server'); setTimeout(connect, 2000); };
+  ws.onerror = () => { if (!gotReal) setStatus('no server'); };
+}
+connect();
+</script>
+</body>
+</html>
