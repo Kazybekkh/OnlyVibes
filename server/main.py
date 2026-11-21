@@ -41,9 +41,12 @@ Endpoints:
     POST /summarize  -> {"last_log": "..."} -> {"summary": "..."} via Mistral Small
     GET  /api/layout -> real-table AR layout {ref, laptops: {key: {x,y,z,yaw,owner}}} (also in /view)
     POST /api/layout -> replace it (control key required), saved to data/layout.json
+    POST /api/xrpose -> latest headset + controller pose from an XR session (control key, in memory)
+    GET  /api/xrpose -> that pose (control key); {pose, age_ms} so a laptop can spectate
   Static
     GET  /           -> web/index.html (kanban board)
     GET  /ar         -> web/ar.html (Three.js / WebXR view, with voice)
+    GET  /spectate   -> same page in laptop spectator mode (3D scene + headset/controllers)
     GET  /mic        -> web/mic.html (fallback voice mic page, role=web)
     GET  /probe      -> web/probe.html (Zapbox capability probe)
   Voice (server/voice.py): push-to-talk speech-to-text only
@@ -504,6 +507,119 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         os.replace(tmp, layout_path)
         return layout_state
 
+    # ------------------------------------------------------------ XR spectator pose
+    # Latest headset + controller pose from web/ar.html, kept in memory only. A laptop
+    # browser at /spectate polls this ~20 Hz and draws the same 3D scene for the audience.
+    xr_pose: dict | None = None
+    xr_pose_at: float = 0.0
+
+    def _finite_vec(v, n: int, *, lo: float, hi: float, name: str) -> list[float]:
+        import math
+        if not isinstance(v, (list, tuple)) or len(v) != n:
+            raise ApiError(400, "bad_request", f"{name} must be a list of {n} numbers")
+        out: list[float] = []
+        for i, x in enumerate(v):
+            if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or x < lo or x > hi:
+                raise ApiError(400, "bad_request", f"{name}[{i}] must be a finite number in range")
+            out.append(round(float(x), 6))
+        return out
+
+    def _quat(v, name: str) -> list[float]:
+        import math
+        q = _finite_vec(v, 4, lo=-2, hi=2, name=name)
+        norm = math.sqrt(sum(x * x for x in q)) or 1.0
+        return [round(x / norm, 6) for x in q]
+
+    def _clean_xrpose(body: dict) -> dict:
+        import math
+        if not isinstance(body, dict):
+            raise ApiError(400, "bad_request", "body must be a JSON object")
+        head = body.get("head")
+        if not isinstance(head, dict):
+            raise ApiError(400, "bad_request", "head is required")
+        clean: dict = {
+            "mode": str(body.get("mode") or "")[:8],
+            "head": {
+                "pos": _finite_vec(head.get("pos"), 3, lo=-100, hi=100, name="head.pos"),
+                "quat": _quat(head.get("quat"), "head.quat"),
+            },
+            "controllers": [],
+            "world": None,
+            "selected": None,
+        }
+        ctrls = body.get("controllers") or []
+        if not isinstance(ctrls, list) or len(ctrls) > 4:
+            raise ApiError(400, "bad_request", "controllers must be a short list")
+        for i, c in enumerate(ctrls):
+            if not isinstance(c, dict):
+                raise ApiError(400, "bad_request", f"controllers[{i}] must be an object")
+            hand = str(c.get("hand") or "")[:8]
+            if not c.get("connected", True):
+                clean["controllers"].append({"connected": False, "hand": hand})
+                continue
+            ray = c.get("ray", 0.5)
+            if isinstance(ray, bool) or not isinstance(ray, (int, float)) or not math.isfinite(ray) or ray < 0 or ray > 20:
+                raise ApiError(400, "bad_request", f"controllers[{i}].ray must be a finite length")
+            clean["controllers"].append({
+                "connected": True,
+                "hand": hand,
+                "pos": _finite_vec(c.get("pos"), 3, lo=-100, hi=100, name=f"controllers[{i}].pos"),
+                "quat": _quat(c.get("quat"), f"controllers[{i}].quat"),
+                "trigger": bool(c.get("trigger")),
+                "squeeze": bool(c.get("squeeze")),
+                "ray": round(float(ray), 4),
+            })
+        world = body.get("world")
+        if world is not None:
+            if not isinstance(world, dict):
+                raise ApiError(400, "bad_request", "world must be an object")
+            sc = world.get("scale", 1)
+            if isinstance(sc, bool) or not isinstance(sc, (int, float)) or not math.isfinite(sc) or sc <= 0 or sc > 20:
+                raise ApiError(400, "bad_request", "world.scale must be a positive finite number")
+            clean["world"] = {
+                "pos": _finite_vec(world.get("pos"), 3, lo=-100, hi=100, name="world.pos"),
+                "quat": _quat(world.get("quat"), "world.quat"),
+                "scale": round(float(sc), 6),
+            }
+        def _card_ref(v, name: str):
+            if v is None:
+                return None
+            if not isinstance(v, dict):
+                raise ApiError(400, "bad_request", f"{name} must be an object or null")
+            ak = str(v.get("ak") or "")[:120]
+            laptop = str(v.get("laptop") or v.get("laptopKey") or "")[:120]
+            return {"ak": ak, "laptop": laptop} if (ak or laptop) else None
+
+        clean["selected"] = _card_ref(body.get("selected"), "selected")
+        clean["hover"] = _card_ref(body.get("hover"), "hover")
+        clean["panel"] = bool(body.get("panel"))
+        clean["grabbed"] = bool(body.get("grabbed"))
+        clean["ptt"] = bool(body.get("ptt"))
+        voice = body.get("voice")
+        vtext = ""
+        if isinstance(voice, dict):
+            vtext = str(voice.get("text") or "")[:200]
+        elif isinstance(voice, str):
+            vtext = voice[:200]
+        clean["voice"] = {"text": vtext} if vtext else None
+        return clean
+
+    def _xrpose_payload() -> dict:
+        if xr_pose is None:
+            return {"pose": None, "age_ms": None}
+        return {"pose": xr_pose, "age_ms": int(max(0.0, (now() - xr_pose_at) * 1000))}
+
+    @app.get("/api/xrpose", dependencies=[Depends(require_control_key)])
+    async def get_xrpose() -> dict:
+        return _xrpose_payload()
+
+    @app.post("/api/xrpose", dependencies=[Depends(require_control_key)])
+    async def post_xrpose(request: Request) -> dict:
+        nonlocal xr_pose, xr_pose_at
+        xr_pose = _clean_xrpose(await _json_body(request))
+        xr_pose_at = now()
+        return _xrpose_payload()
+
     # ---------------------------------------------------------------- voice (Ron's voice-integration)
     app.include_router(make_router(settings, require_control_key))
 
@@ -545,6 +661,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ar", include_in_schema=False)
     async def ar():
         return _page("ar.html")
+
+    @app.get("/spectate", include_in_schema=False)
+    async def spectate():
+        return _page("ar.html")  # same page; JS turns on spectator mode at /spectate
 
     @app.get("/mic", include_in_schema=False)
     async def mic_page():
