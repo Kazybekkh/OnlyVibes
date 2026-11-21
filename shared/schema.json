@@ -104,6 +104,62 @@
           }
         }
       }
+    },
+    "device": {
+      "type": "object",
+      "description": "Optional (reporters >= ar-devices): non-sensitive description of the laptop for the AR view. Older reporters omit it.",
+      "additionalProperties": false,
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "os": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "os_family": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "os_version": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "arch": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "vendor": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "model_id": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "chip": {
+          "type": "string",
+          "maxLength": 80
+        }
+      },
+      "examples": [
+        {
+          "hostname": "kay-mbp",
+          "os": "macOS 15.1",
+          "os_family": "macos",
+          "os_version": "15.1",
+          "arch": "arm64",
+          "vendor": "Apple",
+          "model": "MacBook Pro",
+          "model_id": "Mac15,6",
+          "chip": "Apple M3 Pro"
+        }
+      ]
     }
   }
 }

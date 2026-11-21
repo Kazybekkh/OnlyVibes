@@ -35,6 +35,15 @@ from getpass import getuser
 import psutil
 from websockets.sync.client import connect
 
+# device info (OS, model, chip) for the AR view, shared with the worker; optional
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
+    from device_info import device_info
+except Exception:  # an older checkout without shared/device_info.py
+    def device_info() -> dict:
+        return {}
+
 SERVER_URL = os.environ.get("SERVER_URL", "ws://localhost:8000/ws")
 INTERVAL = float(os.environ.get("INTERVAL", "1"))
 
@@ -795,6 +804,7 @@ def build_status() -> dict:
         "tailscale_ip": tailscale_ip(),
         "ts": time.time(),
         "agents": detect_agents(),
+        "device": device_info(),
     }
 
 

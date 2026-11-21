@@ -60,6 +60,15 @@ from gitops import GitError, GitOps, branch_name
 from planparse import PlanError, extract_plan, normalize_plan
 from prompts import render_build_prompt, render_conflict_prompt, render_plan_prompt
 
+# device info (OS, model, chip) for the AR view, shared with the worker; optional
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
+    from device_info import device_info
+except Exception:  # an older checkout without shared/device_info.py
+    def device_info() -> dict:
+        return {}
+
 VERSION = "2"
 OV_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ov.py")
 MAX_OUTBOX = 5000           # frames buffered while disconnected
@@ -292,7 +301,8 @@ class Worker:
         c = self.cfg
         return {"type": "hello", "running": self.in_flight(),
                 "worker": {"id": c.worker_id, "laptop": c.laptop, "owner": c.owner, "tailscale_ip": c.tailscale_ip,
-                           "agents": c.agents, "max_concurrent": c.max_concurrent, "version": VERSION}}
+                           "agents": c.agents, "max_concurrent": c.max_concurrent, "version": VERSION,
+                           "device": device_info()}}
 
     def flush_run(self, run: TaskRun) -> None:
         if run.pending:

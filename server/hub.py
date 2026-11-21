@@ -24,7 +24,7 @@ import traceback
 from dataclasses import dataclass
 
 from config import Settings
-from legacy import LegacyState
+from legacy import LegacyState, clean_device
 from models import (
     ACTIVE_STATUSES,
     EVENT_KINDS,
@@ -438,6 +438,7 @@ class Hub:
             agents=str_list(info.get("agents")),
             max_concurrent=clamp_int(info.get("max_concurrent"), 1, 64, 1),
             version=str(info.get("version") or ""),
+            device=clean_device(info.get("device")),
             connected_at=t,
             last_seen=t,
         )
@@ -795,9 +796,12 @@ class Hub:
             match = by_ip.get(worker["tailscale_ip"]) if worker["tailscale_ip"] else None
             if match is not None:
                 match["agents"] = list(match.get("agents", [])) + agents
+                if not match.get("device") and worker.get("device"):
+                    match["device"] = worker["device"]
             else:
                 entry = {"laptop": worker["laptop"], "owner": worker["owner"],
-                         "tailscale_ip": worker["tailscale_ip"], "ts": worker["last_seen"], "agents": agents}
+                         "tailscale_ip": worker["tailscale_ip"], "ts": worker["last_seen"], "agents": agents,
+                         "device": worker.get("device") or {}}
                 laptops.append(entry)
                 if worker["tailscale_ip"]:
                     # a second worker process on the same laptop joins this entry instead of

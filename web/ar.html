@@ -72,7 +72,7 @@ renderer.xr.setReferenceSpaceType('local'); // origin = viewer at session start
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0e14);
+scene.background = new THREE.Color(0x101112);
 scene.fog = new THREE.Fog(0x0b0e14, 9, 24);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
@@ -131,6 +131,7 @@ function roundRect(ctx, x, y, w, h, r) {
 
 // agent logos (web/logos/*.png), loaded once and cached; cards waiting on a logo
 // are redrawn exactly once when it arrives
+const AGENT_BORDER = { 'claude-code': '#f49a83', codex: '#9ebda8', vibe: '#dfb96f', cursor: '#8a8d91', agent: '#5b5f64' };
 const LOGO_KEYS = ['claude-code', 'codex', 'vibe', 'cursor', 'agent'];
 const logos = new Map(); // key -> { img, ready, waiting: Set<sprite> }
 function agentLogoKey(name) {
@@ -174,13 +175,13 @@ function setCardText(sprite, text, logoKey = null) {
   const { canvas, ctx, bg, fg, fontPx, scaleMul } = sprite.userData;
   const L = logoKey ? getLogo(logoKey) : null;
   // skip identical redraws (state frames arrive 2x/s) so textures never churn
-  const sig = `${text}|${logoKey}|${L && L.ready}`;
+  const sig = `${text}|${logoKey}|${L && L.ready}|${sprite.userData.border || ''}`;
   if (sprite.userData.drawn === sig && sprite.userData.tex) return;
   sprite.userData.text = text; sprite.userData.logo = logoKey; sprite.userData.drawn = sig;
   const maxW = 560, pad = 14, lineH = fontPx + 7;
   const logoPx = L ? lineH * 2 - 6 : 0, gap = L ? 14 : 0;
   const textW = maxW - logoPx - gap;
-  ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.font = `${fontPx}px 'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif`;
   // wrap (honoring explicit newlines), keep at most 4 lines
   const lines = [];
   for (const para of String(text).split('\n')) {
@@ -199,11 +200,15 @@ function setCardText(sprite, text, logoKey = null) {
   ctx.fillStyle = bg;
   roundRect(ctx, 0, 0, canvas.width, canvas.height, 14);
   ctx.fill();
+  if (sprite.userData.border) { // agent-coloured outline (Claude coral, Codex green, Mistral amber)
+    ctx.lineWidth = 4; ctx.strokeStyle = sprite.userData.border;
+    roundRect(ctx, 2, 2, canvas.width - 4, canvas.height - 4, 13); ctx.stroke();
+  }
   if (L) {
     if (L.ready) ctx.drawImage(L.img, pad, pad + 2, logoPx, logoPx);
     else L.waiting.add(sprite);
   }
-  ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.font = `${fontPx}px 'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif`;
   ctx.fillStyle = fg;
   shown.forEach((ln, i) => ctx.fillText(ln, pad + logoPx + gap, pad + fontPx + i * lineH - 5));
   if (!sprite.userData.tex) {
@@ -220,27 +225,194 @@ function setCardText(sprite, text, logoKey = null) {
 const LAPTOP_COLORS = [0x7dd3fc, 0xf0abfc, 0xa5b4fc, 0xfcd34d, 0xfca5a5, 0xc4b5fd];
 const laptopGroups = new Map(); // key (tailscale_ip) -> THREE.Group
 
+// ---- procedural laptop models (light: a few boxes/planes + small canvas textures, cached)
+// style by the reporter's device info: 'mac' (silver / space grey aluminium, thin bezel, notch,
+// glowing lid mark), 'windows' (dark, squarer, thicker), 'thinkpad' (black, red dot; Lenovo/Linux)
+import('three/addons/geometries/RoundedBoxGeometry.js').then((m) => { RoundedBox = m.RoundedBoxGeometry; refreshModels(); }).catch(() => {});
+let RoundedBox = null;
+const FONT = "'DM Sans', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif";
+const STYLES = {
+  silver:    { deck: 0xa6abb2, lid: 0x9aa0a8, keys: '#2b2f34', keyBg: '#8f949b', pad: 0xb9bec5, deckH: 0.016, lidT: 0.007, bezel: 0.007, r: 0.008, notch: true, glow: true },
+  spacegrey: { deck: 0x727880, lid: 0x6a7078, keys: '#1d2024', keyBg: '#5f656c', pad: 0x80868e, deckH: 0.016, lidT: 0.007, bezel: 0.007, r: 0.008, notch: true, glow: true },
+  windows:   { deck: 0x353e48, lid: 0x2e363f, keys: '#14181d', keyBg: '#2c343d', pad: 0x46505b, deckH: 0.024, lidT: 0.012, bezel: 0.02, r: 0.003 },
+  thinkpad:  { deck: 0x1d2126, lid: 0x1a1d21, keys: '#0b0c0e', keyBg: '#202429', pad: 0x2a2f35, deckH: 0.024, lidT: 0.012, bezel: 0.018, r: 0.003, redDot: true },
+};
+function deviceStyle(dev = {}) {
+  const fam = (dev.os_family || '').toLowerCase(), vendor = (dev.vendor || '').toLowerCase(), model = (dev.model || '').toLowerCase();
+  if (fam === 'macos' || vendor.startsWith('apple')) return model.includes('pro') ? 'spacegrey' : 'silver';
+  if (vendor.includes('lenovo') || model.includes('thinkpad') || fam === 'linux') return 'thinkpad';
+  return 'windows';
+}
+const _texCache = new Map();
+function canvasTex(key, w, h, draw) {
+  if (_texCache.has(key)) return _texCache.get(key);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  _texCache.set(key, t);
+  return t;
+}
+function screenTex(accentHex) { // dark screen, subtle top bar, code lines in the laptop's colour
+  return canvasTex(`screen:${accentHex}`, 256, 160, (ctx, w, h) => {
+    const gr = ctx.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#20282e'); gr.addColorStop(1, '#0e1318');
+    ctx.fillStyle = gr; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#1a2127'; ctx.fillRect(0, 0, w, 14);
+    ['#f49a83', '#dfb96f', '#9ebda8'].forEach((c, i) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(10 + i * 10, 7, 3, 0, 7); ctx.fill(); });
+    const col = '#' + accentHex.toString(16).padStart(6, '0');
+    let seed = accentHex % 97;
+    for (let y = 26; y < h - 8; y += 11) {
+      seed = (seed * 37 + 11) % 101;
+      const indent = 10 + (seed % 4) * 12, len = 40 + (seed * 7) % 150;
+      ctx.globalAlpha = 0.55 + (seed % 3) * 0.15; ctx.fillStyle = seed % 5 ? col : '#8a8d91';
+      ctx.fillRect(indent, y, len, 4);
+    }
+    ctx.globalAlpha = 1;
+  });
+}
+function keysTex(style) {
+  const st = STYLES[style];
+  return canvasTex(`keys:${style}`, 256, 96, (ctx, w, h) => {
+    ctx.fillStyle = st.keyBg; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = st.keys;
+    const rows = 5, cols = 14, kw = (w - 8) / cols, kh = (h - 6) / rows;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (r === rows - 1 && c > 3 && c < 9) continue; // space bar drawn below
+      ctx.fillRect(4 + c * kw + 1, 3 + r * kh + 1, kw - 2.5, kh - 2.5);
+    }
+    ctx.fillRect(4 + 4 * kw + 1, 3 + (rows - 1) * kh + 1, 5 * kw - 2.5, kh - 2.5);
+  });
+}
+function lidMarkTex(glow) { // small 'ov✳' mark on the lid back (no vendor logos)
+  return canvasTex(`mark:${glow}`, 128, 64, (ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = `600 40px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if (glow) { ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 12; }
+    ctx.fillStyle = glow ? 'rgba(255,255,255,0.92)' : 'rgba(170,176,184,0.75)';
+    ctx.fillText('ov✳', w / 2, h / 2 + 2);
+  });
+}
+const _matCache = new Map();
+function mat(key, make) { if (!_matCache.has(key)) _matCache.set(key, make()); return _matCache.get(key); }
+function box(w, h, d, r) { return RoundedBox && r > 0.001 ? new RoundedBox(w, h, d, 2, r) : new THREE.BoxGeometry(w, h, d); }
+
+function buildLaptopModel(style, accentHex) {
+  const st = STYLES[style] || STYLES.windows;
+  const m = new THREE.Group();
+  const W = 0.62, D = 0.43;
+  const metal = mat(`deck:${style}`, () => new THREE.MeshStandardMaterial({ color: st.deck, roughness: style === 'thinkpad' ? 0.85 : 0.5, metalness: style.startsWith('s') ? 0.25 : 0.15 }));
+  const lidMat = mat(`lid:${style}`, () => new THREE.MeshStandardMaterial({ color: st.lid, roughness: style === 'thinkpad' ? 0.85 : 0.5, metalness: style.startsWith('s') ? 0.25 : 0.15 }));
+  const deck = new THREE.Mesh(box(W, st.deckH, D, st.r), metal);
+  deck.position.y = st.deckH / 2;
+  m.add(deck);
+  const top = st.deckH + 0.0008;
+  const keys = new THREE.Mesh(new THREE.PlaneGeometry(0.54, 0.2), mat(`keys:${style}`, () => new THREE.MeshBasicMaterial({ map: keysTex(style) })));
+  keys.rotation.x = -Math.PI / 2; keys.position.set(0, top, -0.07);
+  m.add(keys);
+  const pad = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.12), mat(`pad:${style}`, () => new THREE.MeshStandardMaterial({ color: st.pad, roughness: 0.3, metalness: 0.2 })));
+  pad.rotation.x = -Math.PI / 2; pad.position.set(0, top, 0.125);
+  m.add(pad);
+  if (st.redDot) {
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.007, 10, 6), mat('red', () => new THREE.MeshBasicMaterial({ color: 0xe0242b })));
+    dot.position.set(0, top + 0.002, -0.045);
+    m.add(dot);
+    const btns = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.018), mat('tpbtn', () => new THREE.MeshBasicMaterial({ color: 0x0d0f11 })));
+    btns.rotation.x = -Math.PI / 2; btns.position.set(0, top + 0.0004, 0.055);
+    m.add(btns);
+  }
+  // lid: hinge at the back edge, opened ~104 deg (screen tilted back ~14 deg past vertical)
+  const hinge = new THREE.Group();
+  hinge.position.set(0, st.deckH, -D / 2 + 0.004);
+  hinge.rotation.x = -0.25;
+  m.add(hinge);
+  const LH = 0.4;
+  const lid = new THREE.Mesh(box(W, LH, st.lidT, st.r), lidMat);
+  lid.position.set(0, LH / 2, -st.lidT / 2);
+  hinge.add(lid);
+  const bezel = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.01, LH - 0.01), mat('bezel', () => new THREE.MeshBasicMaterial({ color: 0x0b0d0f })));
+  bezel.position.set(0, LH / 2, 0.0006);
+  hinge.add(bezel);
+  const display = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.01 - 2 * st.bezel, LH - 0.01 - 2 * st.bezel - (st.notch ? 0 : 0.01)),
+    mat(`screen:${accentHex}`, () => new THREE.MeshBasicMaterial({ map: screenTex(accentHex) })));
+  display.position.set(0, LH / 2 - (st.notch ? 0 : 0.005), 0.0012);
+  hinge.add(display);
+  if (st.notch) {
+    const notch = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.014), mat('bezel', () => new THREE.MeshBasicMaterial({ color: 0x0b0d0f })));
+    notch.position.set(0, LH - 0.005 - st.bezel - 0.006, 0.0018);
+    hinge.add(notch);
+  }
+  const mark = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.045), mat(`mark:${!!st.glow}`, () => new THREE.MeshBasicMaterial({ map: lidMarkTex(!!st.glow), transparent: true })));
+  mark.position.set(0, LH * 0.55, -st.lidT - 0.0008); mark.rotation.y = Math.PI;
+  hinge.add(mark);
+  if (st.redDot) {
+    const d2 = new THREE.Mesh(new THREE.CircleGeometry(0.005, 10), mat('red', () => new THREE.MeshBasicMaterial({ color: 0xe0242b })));
+    d2.position.set(-W / 2 + 0.06, LH * 0.12, -st.lidT - 0.0008); d2.rotation.y = Math.PI;
+    hinge.add(d2);
+  }
+  m.userData.isModel = true;
+  return m;
+}
+function setLaptopModel(g, dev) {
+  const style = deviceStyle(dev);
+  const sig = `${style}|${!!RoundedBox}`;
+  if (g.userData.modelSig === sig) return;
+  if (g.userData.model) g.remove(g.userData.model);
+  g.userData.model = buildLaptopModel(style, g.userData.accentHex);
+  g.userData.modelSig = sig;
+  g.add(g.userData.model);
+}
+function refreshModels() { for (const g of laptopGroups.values()) setLaptopModel(g, g.userData.device || {}); }
+
+// ---- owner tag under each laptop: initials avatar, "<Owner>'s MacBook Pro", model · chip · OS, green dot
+function deviceLine(dev = {}) {
+  const chip = (dev.chip || '').replace(/^Apple /, '');
+  return [dev.model, chip, dev.os].filter(Boolean).join(' · ');
+}
+function machineName(dev = {}) {
+  if (dev.model) return dev.model;
+  const fam = (dev.os_family || '').toLowerCase();
+  return fam === 'macos' ? 'Mac' : fam === 'windows' ? 'PC' : fam === 'linux' ? 'Linux laptop' : 'laptop';
+}
+function makeOwnerTag() {
+  const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 128;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: false }));
+  sp.userData = { canvas, ctx: canvas.getContext('2d'), sig: '' };
+  sp.userData.tex = new THREE.CanvasTexture(canvas); sp.userData.tex.colorSpace = THREE.SRGBColorSpace;
+  sp.material.map = sp.userData.tex;
+  sp.scale.set(640 * 0.0026, 128 * 0.0026, 1);
+  sp.renderOrder = 2;
+  return sp;
+}
+function setOwnerTag(sp, owner, dev, accentHex, extra, live) {
+  const title = `${owner || '?'}'s ${machineName(dev)}${extra || ''}`;
+  const line = deviceLine(dev) || 'device info: update reporter';
+  const sig = `${title}|${line}|${accentHex}|${live}`;
+  if (sp.userData.sig === sig) return;
+  sp.userData.sig = sig;
+  const { canvas, ctx } = sp.userData, w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(16,17,18,0.9)'; roundRect(ctx, 0, 8, w, h - 16, 52); ctx.fill();
+  ctx.fillStyle = '#' + accentHex.toString(16).padStart(6, '0');
+  ctx.beginPath(); ctx.arc(58, h / 2, 38, 0, 7); ctx.fill();
+  const initials = String(owner || '?').split(/[\s._-]+/).filter(Boolean).map((x) => x[0]).join('').slice(0, 2).toUpperCase();
+  ctx.fillStyle = '#101112'; ctx.font = `700 32px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(initials, 58, h / 2 + 1);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#eeeeed'; ctx.font = `600 34px ${FONT}`;
+  ctx.fillText(title.length > 30 ? title.slice(0, 29) + '…' : title, 112, 58);
+  ctx.fillStyle = live ? '#9ebda8' : '#8a8d91';
+  ctx.beginPath(); ctx.arc(120, 86, 7, 0, 7); ctx.fill();
+  ctx.fillStyle = '#8a8d91'; ctx.font = `24px ${FONT}`;
+  ctx.fillText(line.length > 44 ? line.slice(0, 43) + '…' : line, 136, 94);
+  sp.userData.tex.needsUpdate = true;
+}
+
 function buildLaptop(status, idx) {
   const g = new THREE.Group();
-  const accent = new THREE.Color(LAPTOP_COLORS[idx % LAPTOP_COLORS.length]);
-
-  const base = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.035, 0.42),
-    new THREE.MeshStandardMaterial({ color: 0x39415a, roughness: 0.5, metalness: 0.3 })
-  );
-  base.position.y = 0.018;
-  g.add(base);
-
-  const screen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.62, 0.4, 0.025),
-    new THREE.MeshStandardMaterial({ color: 0x0d1117, emissive: accent, emissiveIntensity: 0.6, roughness: 0.3 })
-  );
-  screen.position.set(0, 0.21, -0.2);
-  screen.rotation.x = -0.35;
-  g.add(screen);
-
-  const label = makeCard({ fontPx: 24, bg: 'rgba(15,20,30,0.9)' });
-  label.position.y = 0.66;
+  g.userData.accentHex = LAPTOP_COLORS[idx % LAPTOP_COLORS.length];
+  g.userData.device = status.device || {};
+  setLaptopModel(g, g.userData.device);
+  const label = makeOwnerTag();
+  label.position.set(0, -0.02, 0.4); // under / in front of the laptop
   g.add(label);
   g.userData.label = label;
   g.userData.cards = new Map(); // agentKey -> sprite
@@ -275,14 +447,16 @@ function applyState(snap) {
       relayout();
     }
     g.userData.owner = st.owner;
-    setCardText(g.userData.label, `${st.owner}${viewerDistanceText(g)}`);
+    g.userData.device = st.device || {};
+    setLaptopModel(g, g.userData.device);
+    setOwnerTag(g.userData.label, st.owner, g.userData.device, g.userData.accentHex, viewerDistanceText(g), true);
 
     const cards = g.userData.cards;
     const names = new Set();
     g.userData.lastSeen = performance.now();
     // sessions sorted by name; a subagent's name starts with its parent's, so it lands right under it
     const agents = [...(st.agents || [])].sort((x, y) => String(x.name).localeCompare(String(y.name)));
-    let y = 1.05;
+    let y = 0.6; // cards float right above the open lid
     agents.forEach((a) => {
       let ak = String(a.name || 'agent');
       for (let n = 2; names.has(ak); n++) ak = `${a.name} #${n}`; // never let two entries share a card
@@ -291,8 +465,8 @@ function applyState(snap) {
       let card = cards.get(ak);
       if (!card) {
         card = sub
-          ? makeCard({ fontPx: 19, bg: 'rgba(14,22,40,0.9)', fg: '#c9d8f5', scaleMul: 0.8 })
-          : makeCard({ fontPx: 21, bg: 'rgba(8,26,20,0.9)', fg: '#d9f4e6' });
+          ? makeCard({ fontPx: 19, bg: 'rgba(22,24,27,0.92)', fg: '#d6d7d6', scaleMul: 0.8 })
+          : makeCard({ fontPx: 21, bg: 'rgba(16,17,18,0.92)', fg: '#eeeeed' });
         g.add(card);
         cards.set(ak, card);
       }
@@ -300,6 +474,7 @@ function applyState(snap) {
       const label = sub ? '↳ ' + String(a.name).split(' › ').pop() : a.name;
       // subagents wear their parent's logo (smaller, via the card's scaleMul)
       const logoKey = agentLogoKey(sub && a.parent ? a.parent : a.name);
+      card.userData.border = AGENT_BORDER[logoKey] || AGENT_BORDER.agent;
       setCardText(card, task ? `${label}\n${task}` : label, logoKey);
       const h = card.scale.y;
       card.userData.baseY = y + h / 2;
@@ -579,7 +754,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   renderer.domElement.style.cursor = interactiveHit(raycaster.ray.clone()) ? 'pointer' : '';
 });
 addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
-window.__ov = { openPanel, closePanel, press, control, laptopGroups, panelButtons: () => panelButtons, camera };
+window.__ov = { openPanel, closePanel, press, control, laptopGroups, panelButtons: () => panelButtons, camera, orbit };
 
 const _right = new THREE.Vector3();
 function updatePanel(parentQ, camQ) {
@@ -607,7 +782,7 @@ function updateRays() {
 // WebXR 'local' space changes every session, so in a new session you re-place just those
 // two (after touching the table once for its height) and every other laptop snaps in.
 const PLACED_SCALE = 0.3;      // placed group: 0.62 m model -> ~19 cm, cards ~57 cm wide
-const DESK_LAYOUT_SCALE = 2.2; // desktop preview: 1 real metre = 2.2 scene units
+const DESK_LAYOUT_SCALE = 4;   // desktop preview: 1 real metre = 4 scene units (cards need room)
 const UP = new THREE.Vector3(0, 1, 0);
 const placedRoot = new THREE.Group();
 scene.add(placedRoot);

@@ -28,6 +28,12 @@
 
   // ================================================================== DOM helpers
 
+  // "MacBook Air · M2 · macOS 27.0" from a worker's optional device info
+  function deviceText(d) {
+    if (!d) return '';
+    return [d.model, (d.chip || '').replace(/^Apple /, ''), d.os].filter(Boolean).join(' · ');
+  }
+
   /** h('div', {class, text, on: {click}, data: {id}, ...attrs}, ...children). Strings become text nodes. */
   function h(tag, attrs, ...children) {
     const el = document.createElement(tag);
@@ -399,12 +405,13 @@
       const running = (w.running || []).map((id) => app.store.tasks.get(id)).filter(Boolean);
       const chip = h('div', {
         class: `wk ws-${w.status}`,
-        title: `${w.laptop} (${w.owner})${w.tailscale_ip ? ' · ' + w.tailscale_ip : ''}\nagents: ${(w.agents || []).join(', ') || 'none'}` +
+        title: `${w.laptop} (${w.owner})${w.tailscale_ip ? ' · ' + w.tailscale_ip : ''}${deviceText(w.device) ? '\n' + deviceText(w.device) : ''}\nagents: ${(w.agents || []).join(', ') || 'none'}` +
           `\n${w.status}${w.status === 'offline' ? ', last seen ' + L.relTime(w.last_seen, now()) + ' ago' : ''}`,
       },
       h('span', { class: 'wk-dot', 'aria-label': w.status }),
       h('span', { class: 'wk-name mono' }, w.laptop || w.id),
       h('span', { class: 'wk-owner' }, w.owner),
+      deviceText(w.device) ? h('span', { class: 'wk-dev' }, deviceText(w.device)) : null,
       h('span', { class: 'wk-agents' }, (w.agents || []).map(agentBadge)),
       h('canvas', { class: 'trace', width: 48, height: 14, data: { worker: w.id }, 'aria-hidden': 'true' }),
       running.length
