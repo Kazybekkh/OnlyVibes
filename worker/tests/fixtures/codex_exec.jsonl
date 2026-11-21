@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a1fe01-3f3b-70f2-9c93-a7959c2845df"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc 'echo hi'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc 'echo hi'","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":28368,"cached_input_tokens":25472,"cache_write_input_tokens":0,"output_tokens":38,"reasoning_output_tokens":0}}
