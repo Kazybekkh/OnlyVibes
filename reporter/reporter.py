@@ -147,6 +147,7 @@ def detect_agents() -> list[dict]:
                         "cpu": cpu,
                         "cwd": cwd,
                         "last_log": tail_log(agent_name),
+                        "task": session_title(agent_name),
                         "summary": "",  # filled by the server's summarize()
                     }
                 )
@@ -248,6 +249,38 @@ def tail_log(agent: str) -> str:
             last = readable_from_jsonl_line(last)
         return last[:MAX_LOG_CHARS]
     return ""
+
+
+def session_title(agent: str) -> str:
+    """Short name of what the agent is working on (conversation title).
+
+    Claude Code: the session's "summary" entry, else its first user prompt.
+    Other agents: empty (the server falls back to a Mistral summary).
+    """
+    if agent != "claude-code":
+        return ""
+    path = _newest_log_file(os.path.expanduser("~/.claude/projects"))
+    if not path:
+        return ""
+    first_prompt = ""
+    try:
+        with open(path, "r", errors="ignore") as fh:
+            for ln in fh:
+                try:
+                    obj = json.loads(ln)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "summary" and obj.get("summary"):
+                    return str(obj["summary"])[:60]
+                if not first_prompt and obj.get("type") == "user":
+                    c = (obj.get("message") or {}).get("content")
+                    if isinstance(c, list):
+                        c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+                    if isinstance(c, str) and c.strip() and not c.lstrip().startswith("<"):
+                        first_prompt = c.strip().splitlines()[0]
+    except OSError:
+        return ""
+    return first_prompt[:60]
 
 
 def build_status() -> dict:

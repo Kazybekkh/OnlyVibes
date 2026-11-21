@@ -49,7 +49,11 @@
           },
           "summary": {
             "type": "string",
-            "description": "One plain-English line produced by server summarize() from last_log; may be empty on arrival"
+            "description": "Short task title produced by server summarize() from last_log (max 6 words); may be empty on arrival or without MISTRAL_API_KEY"
+          },
+          "task": {
+            "type": "string",
+            "description": "Optional short title of what the agent is working on, set by the reporter (e.g. Claude Code session title); may be empty"
           }
         }
       }

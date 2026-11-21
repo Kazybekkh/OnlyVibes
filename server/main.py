@@ -312,6 +312,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 hub.board_peers.discard(peer)
 
     # ---------------------------------------------------------------- legacy
+    # summary cache + rate limit for the legacy /ws path (ported from kazy/ar-fixes):
+    # (laptop_key, agent_name) -> (last_log, summary); at most 1 Mistral call per
+    # agent per SUMMARY_RATE_LIMIT_S seconds, and only when last_log changed
+    summary_cache: dict[tuple[str, str], tuple[str, str]] = {}
+    summary_rate: dict[tuple[str, str], float] = {}
+    SUMMARY_RATE_LIMIT_S = 5.0
+
+    async def get_summary(laptop_key: str, agent: dict) -> str:
+        name = agent.get("name", "")
+        log = (agent.get("last_log") or "").strip()
+        key = (laptop_key, name)
+        cached = summary_cache.get(key)
+        if cached and cached[0] == log:
+            return cached[1]
+        if time.time() - summary_rate.get(key, 0.0) < SUMMARY_RATE_LIMIT_S:
+            return cached[1] if cached else ""
+        summary_rate[key] = time.time()
+        s = await summarize(log, settings.mistral_api_key, settings.mistral_model)
+        summary_cache[key] = (log, s)
+        return s
+
     @app.websocket("/ws")
     async def ws_reporter(websocket: WebSocket) -> None:
         """Receive status messages from reporters (schema: shared/schema.json)."""
@@ -327,11 +348,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not isinstance(data, dict):
                     continue
                 data.setdefault("ts", time.time())
+                ikey = (data.get("tailscale_ip") or "").strip()
+                if not ikey or ikey == "127.0.0.1":
+                    ikey = data.get("laptop") or "unknown"
                 # fill in summaries for agents that arrived without one
                 todo = [a for a in data.get("agents", []) if not a.get("summary") and a.get("last_log")]
                 if todo:
-                    sums = await asyncio.gather(*(summarize(a["last_log"], settings.mistral_api_key,
-                                                            settings.mistral_model) for a in todo))
+                    sums = await asyncio.gather(*(get_summary(ikey, a) for a in todo))
                     for a, s in zip(todo, sums):
                         a["summary"] = s
                 async with hub.lock:
