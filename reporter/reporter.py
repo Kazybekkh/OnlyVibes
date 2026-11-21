@@ -29,11 +29,21 @@ import signal
 import platform
 import socket
 import subprocess
+import threading
 import time
 from getpass import getuser
 
 import psutil
 from websockets.sync.client import connect
+
+# device info (OS, model, chip) for the AR view, shared with the worker; optional
+try:
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
+    from device_info import device_info
+except Exception:  # an older checkout without shared/device_info.py
+    def device_info() -> dict:
+        return {}
 
 SERVER_URL = os.environ.get("SERVER_URL", "ws://localhost:8000/ws")
 INTERVAL = float(os.environ.get("INTERVAL", "1"))
@@ -415,7 +425,9 @@ def claude_sessions(procs: list[dict], now: float) -> list[dict]:
         path = _CLAUDE_PID_LOG.get((r["pid"], r["ctime"]))
         if not path or path in used or not os.path.exists(path):
             path = pick_claude_log(r, used)
-            if path:
+            # only pin the process to its OWN log (created after it started); a fallback guess (its log
+            # doesn't exist yet: no prompt sent) is re-evaluated next tick
+            if path and _birth(path) >= r["ctime"] - 5:
                 _CLAUDE_PID_LOG[(r["pid"], r["ctime"])] = path
         log = None
         if path:
@@ -727,6 +739,130 @@ def _live_agent_proc(info: dict) -> psutil.Process | None:
     return p if c and c[0] == info["agent"] and c[1] == "cli" else None
 
 
+# ---- focus: bring the window hosting an agent to the front on THIS laptop (no streaming).
+# Walk from the agent's process up its parents to the first known agent app / terminal and
+# activate only that. Whitelists below; nothing from the request reaches a command line
+# except via this lookup (the request only names a card).
+MAC_HOST_APPS = {"Cursor", "Claude", "Codex", "Vibe", "Terminal", "iTerm", "iTerm2", "Warp", "Ghostty",
+                 "Visual Studio Code", "Code", "WezTerm", "Alacritty", "kitty", "Hyper", "Tabby", "Zed",
+                 "Windsurf"}
+WIN_HOST_EXES = {"windowsterminal.exe", "cursor.exe", "code.exe", "claude.exe", "codex.exe", "wezterm-gui.exe",
+                 "alacritty.exe", "warp.exe", "windsurf.exe", "powershell.exe", "pwsh.exe", "cmd.exe"}
+LINUX_HOST_EXES = {"gnome-terminal-server", "konsole", "kitty", "alacritty", "wezterm-gui", "ghostty", "xterm",
+                   "tilix", "terminator", "xfce4-terminal", "cursor", "code", "claude", "warp-terminal",
+                   "windsurf", "zed"}
+
+
+def _mac_bundle(exe: str) -> tuple[str, str] | None:
+    """('/Applications/Cursor.app', 'Cursor') for any path inside the OUTERMOST .app bundle."""
+    m = re.match(r"^(.*?/([^/]+)\.app)(/|$)", exe or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def find_host(chain: list[tuple[int, str, str]], system: str) -> dict | None:
+    """First whitelisted window host in a process chain [(pid, exe_path, name), ...] (self first)."""
+    for pid, exe, name in chain:
+        if system == "Darwin":
+            b = _mac_bundle(exe)
+            if b and b[1] in MAC_HOST_APPS:
+                return {"pid": pid, "app": b[1], "bundle": b[0]}
+        else:
+            base = os.path.basename((exe or name or "").replace("\\", "/")).lower()
+            allowed = WIN_HOST_EXES if system == "Windows" else LINUX_HOST_EXES
+            if base in allowed or (name or "").lower() in allowed:
+                return {"pid": pid, "app": base or name.lower()}
+    return None
+
+
+def _proc_chain(pid: int, depth: int = 25) -> list[tuple[int, str, str]]:
+    chain = []
+    try:
+        p = psutil.Process(pid)
+    except psutil.Error:
+        return chain
+    while p is not None and len(chain) < depth and p.pid > 1:
+        try:
+            exe = p.exe()
+        except (psutil.Error, OSError):
+            try:
+                exe = (p.cmdline() or [""])[0]
+            except (psutil.Error, OSError):
+                exe = ""
+        try:
+            name = p.name()
+        except (psutil.Error, OSError):
+            name = ""
+        chain.append((p.pid, exe, name))
+        try:
+            p = p.parent()
+        except psutil.Error:
+            break
+    return chain
+
+
+def focus_command(host: dict, system: str) -> list[str] | None:
+    """The one fixed command that activates `host` (argv list, never a shell string)."""
+    if system == "Darwin":
+        bundle = host.get("bundle") or ""
+        if not bundle.endswith(".app") or not os.path.isdir(bundle):
+            return None
+        return ["open", "-a", bundle]
+    pid = int(host["pid"])
+    if system == "Windows":
+        return ["powershell", "-NoProfile", "-Command",
+                f"(New-Object -ComObject WScript.Shell).AppActivate({pid}) | Out-Null"]
+    if shutil.which("xdotool"):
+        return ["xdotool", "search", "--onlyvisible", "--pid", str(pid), "windowactivate"]
+    if shutil.which("wmctrl"):
+        return ["wmctrl", "-i", "-a", f"pid:{pid}"]  # resolved to a window id in focus_agent()
+    return None
+
+
+# desktop app per agent family: pid-less cards (sessions read from an app's logs) focus that app
+AGENT_DESKTOP_APP = {"claude-code": "Claude", "codex": "Codex", "cursor": "Cursor", "vibe": "Vibe"}
+
+
+def _desktop_app_pid(agent: str) -> int:
+    app = AGENT_DESKTOP_APP.get(agent)
+    if not app or platform.system() != "Darwin":
+        return 0
+    want = f"/{app}.app/Contents/MacOS/"
+    for p in psutil.process_iter(["pid", "exe"]):
+        exe = p.info.get("exe") or ""
+        if want in exe and _mac_bundle(exe) and _mac_bundle(exe)[1] == app:
+            return p.info["pid"]
+    return 0
+
+
+def focus_agent(info: dict) -> dict:
+    pid = int(info.get("pid") or 0) or _desktop_app_pid(str(info.get("agent") or ""))
+    if not pid:
+        return {"ok": False, "message": "this session has no running process to focus"}
+    system = platform.system()
+    host = find_host(_proc_chain(pid), system)
+    if host is None:
+        return {"ok": False, "message": "couldn't find its window (not in a known app or terminal)"}
+    cmd = focus_command(host, system)
+    if cmd is None:
+        return {"ok": False, "message": "focusing windows isn't supported here (install xdotool or wmctrl)"
+                if system == "Linux" else "couldn't focus that app"}
+    if cmd[0] == "wmctrl":  # wmctrl needs a window id: look it up by pid in `wmctrl -lp`
+        out = subprocess.run(["wmctrl", "-lp"], capture_output=True, text=True, timeout=3).stdout
+        wid = next((ln.split()[0] for ln in out.splitlines() if len(ln.split()) > 2 and ln.split()[2] == str(host["pid"])), None)
+        if not wid:
+            return {"ok": False, "message": "no visible window for that app"}
+        cmd = ["wmctrl", "-i", "-a", wid]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=6)
+    if r.returncode != 0:
+        return {"ok": False, "message": f"couldn't focus {host['app']}"}
+    if system == "Darwin":  # second nudge: `open -a` alone sometimes loses to the app the user just clicked
+        time.sleep(0.3)
+        subprocess.run(["osascript", "-e", f'tell application "{host["bundle"]}" to activate'],
+                       capture_output=True, text=True, timeout=6)
+    print(f"[reporter] control: focused {host['app']}")
+    return {"ok": True, "message": f"focused {host['app']}"}
+
+
 def handle_control(msg: dict) -> dict:
     agent = str(msg.get("agent") or "")
     action = str(msg.get("action") or "")
@@ -734,8 +870,10 @@ def handle_control(msg: dict) -> dict:
     info = _CONTROL.get(agent)
     if info is None:
         return {"ok": False, "message": f"{agent or 'that agent'} is not running on this laptop any more"}
+    if action == "focus":  # works for apps, terminal sessions and subagents (their parent's window)
+        return focus_agent(info)
     if info["kind"] == "app":
-        return {"ok": False, "message": "desktop apps are view-only from AR; control them in the app"}
+        return {"ok": False, "message": "desktop apps can only be focused from AR; control them in the app"}
     proc = _live_agent_proc(info)
     if action == "stop":
         if proc is None:
@@ -749,21 +887,107 @@ def handle_control(msg: dict) -> dict:
             return {"ok": False, "message": f"{action} is only supported for Claude Code sessions (type in its terminal)"}
         if proc is not None:
             return {"ok": False, "message": "this session is open in a terminal: type there, or Stop it first and then Resume here"}
-        claude = shutil.which("claude") or next(
-            (os.path.expanduser(c) for c in CLAUDE_BIN_CANDIDATES if os.path.isfile(os.path.expanduser(c))), None)
-        if not claude:
-            return {"ok": False, "message": "claude CLI not found on this laptop"}
-        session_id = os.path.basename(info["log"])[:-6]
-        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
-            return {"ok": False, "message": "unrecognised session id"}
-        prompt = text or "continue"
-        cwd = info["cwd"] if info["cwd"] and os.path.isdir(info["cwd"]) else os.path.expanduser("~")
-        with open(CONTROL_LOG, "ab") as out:
-            subprocess.Popen([claude, "-p", "--resume", session_id, prompt], cwd=cwd, stdin=subprocess.DEVNULL,
-                             stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-        print(f"[reporter] control: resumed {agent} headless")
-        return {"ok": True, "message": f"resumed {agent} headless with: {prompt[:60]}"}
+        return _resume_claude(info, text or "continue", agent)
+    if action == "redirect":
+        return redirect_agent(info, text, agent, proc)
     return {"ok": False, "message": f"unknown action {action!r}"}
+
+
+def _resume_claude(info: dict, prompt: str, agent: str) -> dict:
+    """Continue a Claude Code session headless (`claude -p --resume <id> <prompt>`, argv only)."""
+    claude = shutil.which("claude") or next(
+        (os.path.expanduser(c) for c in CLAUDE_BIN_CANDIDATES if os.path.isfile(os.path.expanduser(c))), None)
+    if not claude:
+        return {"ok": False, "message": "claude CLI not found on this laptop"}
+    session_id = os.path.basename(info.get("log") or "")[:-6]
+    if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", session_id):
+        return {"ok": False, "message": "unrecognised session id"}
+    cwd = info["cwd"] if info.get("cwd") and os.path.isdir(info["cwd"]) else os.path.expanduser("~")
+    with open(CONTROL_LOG, "ab") as out:
+        subprocess.Popen([claude, "-p", "--resume", session_id, prompt], cwd=cwd, stdin=subprocess.DEVNULL,
+                         stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    print(f"[reporter] control: resumed {agent} headless")
+    return {"ok": True, "message": f"resumed {agent} headless with: {prompt[:60]}"}
+
+
+def _tmux_pane(proc) -> str | None:
+    """tmux pane id (%N) whose tty is the agent's terminal, if it runs inside tmux."""
+    tmux = shutil.which("tmux")
+    try:
+        tty = proc.terminal()
+    except (psutil.Error, OSError):
+        tty = None
+    if not tmux or not tty:
+        return None
+    try:
+        out = subprocess.run([tmux, "list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == tty and re.fullmatch(r"%\d+", parts[1]):
+            return parts[1]
+    return None
+
+
+def _wait_then_resume(proc, info: dict, prompt: str, agent: str) -> None:
+    try:
+        proc.wait(timeout=8)
+    except psutil.TimeoutExpired:
+        print(f"[reporter] control: {agent} did not stop; new prompt not sent")
+        return
+    except psutil.Error:
+        pass
+    _resume_claude(info, prompt, agent)
+
+
+def redirect_agent(info: dict, text: str, agent: str, proc) -> dict:
+    """Voice: interrupt the agent and give it `text` as its new prompt.
+
+    Claude Code in tmux: Esc (interrupt the turn) + type the prompt into its pane, the session stays open.
+    Claude Code elsewhere: Ctrl-C (SIGINT, which ends the CLI), then `claude -p --resume <id> <text>`
+    continues the same conversation headless. Other agents: interrupt only, and say so.
+    """
+    if not text:
+        return {"ok": False, "message": "nothing to send"}
+    who = "its parent session" if info["kind"] == "subagent" else agent
+    if info["agent"] != "claude-code":
+        if proc is None:
+            return {"ok": False, "message": f"{info['agent']} can't take a voice prompt yet: type it in their terminal"}
+        os.kill(proc.pid, signal.SIGINT)
+        print(f"[reporter] control: SIGINT -> {agent} (redirect, no prompt support)")
+        return {"ok": False, "message": f"sent Ctrl-C to {who}, but {info['agent']} can't take a voice prompt "
+                                        "yet: type it in their terminal"}
+    if not info.get("log"):
+        return {"ok": False, "message": "can't find that Claude session's id"}
+    if proc is None:
+        return _resume_claude(info, text, agent)
+    pane = _tmux_pane(proc)
+    if not pane and info.get("ctime") and _mtime(info["log"]) < info["ctime"] - 5:
+        # the log hasn't been written since this process started: it may be another conversation
+        return {"ok": False, "message": "can't tell which conversation that terminal is in yet; not interrupting"}
+    if pane:
+        tmux = shutil.which("tmux")
+        subprocess.run([tmux, "send-keys", "-t", pane, "Escape"], timeout=3)
+        time.sleep(0.4)
+        subprocess.run([tmux, "send-keys", "-t", pane, "-l", "--", text], timeout=3)
+        subprocess.run([tmux, "send-keys", "-t", pane, "Enter"], timeout=3)
+        print(f"[reporter] control: redirected {agent} in tmux pane {pane}")
+        return {"ok": True, "message": f"interrupted {who} and sent the new prompt in its terminal"}
+    os.kill(proc.pid, signal.SIGINT)  # Claude Code exits on SIGINT
+    print(f"[reporter] control: SIGINT -> {agent} (redirect)")
+    try:
+        proc.wait(timeout=3)
+    except psutil.TimeoutExpired:  # still shutting down: finish in the background, don't stall reports
+        threading.Thread(target=_wait_then_resume, args=(proc, info, text, agent), daemon=True).start()
+        return {"ok": True, "message": f"interrupting {who}; the new prompt starts when it stops"}
+    except psutil.Error:
+        pass
+    r = _resume_claude(info, text, agent)
+    if r["ok"]:
+        r["message"] = f"interrupted {who} and sent the new prompt (continues headless)"
+    return r
 
 
 def _drain_controls(ws, seconds: float) -> None:
@@ -795,6 +1019,7 @@ def build_status() -> dict:
         "tailscale_ip": tailscale_ip(),
         "ts": time.time(),
         "agents": detect_agents(),
+        "device": device_info(),
     }
 
 

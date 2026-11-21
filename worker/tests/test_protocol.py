@@ -120,6 +120,7 @@ def test_build_task_local_mode(stub_hub, tmp_path, monkeypatch):
             hello = await srv.expect("hello")
             assert srv.paths[0] == "/worker"  # /ws rewritten
             assert hello["running"] == []
+            assert isinstance(hello["worker"].pop("device", {}), dict)  # optional device info (OS/model)
             assert hello["worker"] == {"id": "w-test", "laptop": "test-laptop", "owner": "tester",
                                        "tailscale_ip": "100.64.0.99", "agents": ["mock"], "max_concurrent": 1,
                                        "version": "2"}

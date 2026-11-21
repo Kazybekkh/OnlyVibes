@@ -85,3 +85,29 @@ def test_control_open_when_no_secret(make_client):
     """Without OV_CONTROL_SECRET nothing is locked (backwards compatible)."""
     c = make_client()
     assert c.post("/api/control", json={"action": "stop", "laptop": "x", "agent": "y"}).status_code == 404
+
+
+def test_focus_forwarded_and_locked(make_client):
+    """'focus' goes to the reporter like the other actions and needs the key; task cards have no window."""
+    c = make_client(control_secret="s3cret")
+    body = {"laptop": "100.0.0.8", "agent": "cursor", "action": "focus"}
+    assert c.post("/api/control", json=body).status_code == 403
+    with c.websocket_connect("/ws") as rep:
+        rep.send_json({"laptop": "kay-mbp", "owner": "kay", "tailscale_ip": "100.0.0.8", "ts": time.time(),
+                       "agents": [{"name": "cursor", "pid": 1, "cpu": 0, "cwd": "", "last_log": "", "summary": "",
+                                   "kind": "app"}]})
+        seen = {}
+
+        def answer():
+            msg = rep.receive_json()
+            seen.update(msg)
+            rep.send_json({"type": "control_result", "id": msg["id"], "ok": True, "message": "focused Cursor"})
+
+        th = threading.Thread(target=answer)
+        th.start()
+        r = c.post("/api/control?key=s3cret", json=body)
+        th.join(5)
+        assert r.status_code == 200 and r.json() == {"ok": True, "message": "focused Cursor"}
+        assert seen["action"] == "focus" and seen["agent"] == "cursor"
+    r = c.post("/api/control", json={"task_id": "t-1", "action": "focus"}, headers={"X-OV-Key": "s3cret"})
+    assert r.status_code == 200 and r.json()["ok"] is False

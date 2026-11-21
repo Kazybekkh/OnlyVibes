@@ -120,8 +120,34 @@ Humans can join the conversation from the "Agent chatter" rail or from a task's 
 | `AUTO_MERGE`      | worker   | `1`                        | squash-merge PRs automatically; `0` leaves them in Review |
 | `AGENT_TIMEOUT`   | worker   | `3600`                     | max seconds per agent run                           |
 | `MOCK_SPEED`      | worker   | `1`                        | speed multiplier for mock agents                    |
+| `VOICE_MIC`       | server   | `browser`                  | which role may talk: `browser` (Zapbox headset phone) or `web` (fallback `/mic` page) |
+| `VOICE_SPEAKER`   | server   | `browser`                  | where replies are spoken: `browser`, `web`, `mic` (same as mic), or `all` |
+| `VOICE_CHAT_MODEL`| server   | `MISTRAL_MODEL`            | LLM behind `/api/voice/chat` (grounded in the live snapshot) |
+| `MISTRAL_API_BASE`| server   | `https://api.mistral.ai/v1`| Mistral API base (token mint + chat + SSE)              |
 
 All worker variables are documented in `worker/worker.py`'s docstring, and all server variables in `server/main.py`'s.
+
+## Voice prompts in Zapbox (AR)
+
+Voice is for interrupting one person's agent and giving it a new prompt. Voxtral is used only for
+speech-to-text (no spoken replies, no Q&A).
+
+1. Open `https://<hub>/ar?key=<OV_CONTROL_SECRET>` in Zapbox Browser, tap **🎙 Enable voice**, then **Enter AR**.
+2. Point at an agent card and pull the **trigger**: it highlights and the head-locked card says
+   "Voice target: <agent> on <owner>'s laptop".
+3. **Hold B/Y** (xr-standard gamepad button 5), speak the new prompt, release.
+4. The transcript shows for 2 s ("press B/Y to cancel"), then `POST /api/control` `action=redirect` interrupts that agent
+   and sends the transcript as its new prompt. With no card selected it just says "Select an agent first".
+
+- What redirect does (reporter whitelist): Claude Code inside tmux gets Esc + the prompt typed into its pane (session
+  stays open); Claude Code in any other terminal gets Ctrl-C (it exits) and then `claude -p --resume <session> "<prompt>"`
+  continues the same conversation headless; orchestra task cards get the text in their inbox; other agents (codex, vibe,
+  cursor...) are interrupted only, and the card says they can't take a voice prompt yet.
+- Buttons: trigger selects a card (or grabs the scene on empty space), squeeze re-centres the arc, stick scales/rotates. Desktop / phone:
+  click a card, then the **Hold to talk** button or hold **Space**. `?ptt=<button index>` or `?ptt=trigger` overrides.
+- Fallback mic: `https://<hub>/mic?key=…` on a laptop or phone: pick the agent in the dropdown, hold to talk, same redirect.
+- The browser never sees the Mistral key: `/api/voice/token` (control key required) mints a short-lived `rt_*` token for
+  `voxtral-mini-transcribe-realtime-3` and the page streams audio to Mistral directly. Probe page: `/probe`.
 
 ## v1 reporter schema (`shared/schema.json`, 3D tab)
 

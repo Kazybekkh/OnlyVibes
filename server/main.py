@@ -39,9 +39,16 @@ Endpoints:
                         lists one synthesized laptop per connected worker whose "agents" are the
                         tasks it runs (merged into the reporter entry with the same tailscale_ip)
     POST /summarize  -> {"last_log": "..."} -> {"summary": "..."} via Mistral Small
+    GET  /api/layout -> real-table AR layout {ref, laptops: {key: {x,y,z,yaw,owner}}} (also in /view)
+    POST /api/layout -> replace it (control key required), saved to data/layout.json
   Static
     GET  /           -> web/index.html (kanban board)
-    GET  /ar         -> web/ar.html (old Three.js / WebXR view)
+    GET  /ar         -> web/ar.html (Three.js / WebXR view, with voice)
+    GET  /mic        -> web/mic.html (fallback voice mic page, role=web)
+    GET  /probe      -> web/probe.html (Zapbox capability probe)
+  Voice (server/voice.py): push-to-talk speech-to-text only
+    POST /api/voice/token -> short-lived Voxtral STT token (control key required), POST /api/voice/log,
+    GET /api/voice/health. The transcript goes to POST /api/control action=redirect.
     GET  /<file>     -> anything else in web/ (board.js, board.css, ...)
 
 Errors are JSON: {"error": {"code": "...", "message": "..."}} with a 4xx status.
@@ -91,6 +98,7 @@ from hub import Hub, WorkerConn
 from legacy import summarize
 from models import ApiError, now
 from peers import Peer, serve_peer
+from voice import make_router
 
 INBOX_MAX_WAIT = 60.0
 
@@ -404,10 +412,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """
         body = await _json_body(request)
         action = str(body.get("action") or "")
-        if action not in ("stop", "resume", "say"):
-            return _error(400, "bad_request", "action must be stop, resume or say")
+        if action not in ("stop", "resume", "say", "focus", "redirect"):
+            return _error(400, "bad_request", "action must be stop, resume, say, focus or redirect")
         text = " ".join(str(body.get("text") or "").split())[:500]
+        # redirect (voice): interrupt the agent and give it `text` as its new prompt
+        if action == "redirect" and not text:
+            return _error(400, "bad_request", "text is required")
         task_id = str(body.get("task_id") or "")
+        if task_id and action == "focus":
+            return {"ok": False, "message": "orchestra tasks run headless on the worker: no window to open"}
         if task_id:
             async with hub.lock:
                 task = hub.task_view(task_id)["task"]
@@ -419,6 +432,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     return {"ok": True, "message": f"requeued {task['key']}"}
                 if not text:
                     return _error(400, "bad_request", "text is required")
+                # say / redirect: orchestra agents read their inbox between steps
                 hub.human_message({"project_id": task["project_id"], "to": task_id, "text": text, "name": "AR"})
                 return {"ok": True, "message": f"sent to {task['key']}"}
         laptop, agent = str(body.get("laptop") or ""), str(body.get("agent") or "")
@@ -431,7 +445,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             await sock.send_text(json.dumps({"type": "control", "id": rid, "agent": agent,
                                              "action": action, "text": text}))
-            return await asyncio.wait_for(fut, timeout=5.0)
+            # redirect waits for the old process to exit before resuming it
+            return await asyncio.wait_for(fut, timeout=25.0 if action == "redirect" else 5.0)
         except asyncio.TimeoutError:
             return _error(504, "timeout", "no answer from that laptop: its reporter may be an older "
                                           "version (pull and restart it)")
@@ -439,6 +454,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _error(502, "unreachable", "could not reach that laptop's reporter")
         finally:
             control_waiters.pop(rid, None)
+
+    # ------------------------------------------------------------ AR table layout
+    # Real-table placement of the virtual laptops (web/ar.html "Place laptops"). Positions
+    # are metres in a frame anchored on the reference laptops: ref[0] is the origin, and the
+    # direction ref[0] -> ref[1] fixes the rotation, so a new WebXR session only has to
+    # re-place those two laptops and every other one snaps into place.
+    layout_path = settings.data_dir / "layout.json"
+    layout_state: dict = {"ref": [], "laptops": {}}
+    try:
+        layout_state.update(json.loads(layout_path.read_text()))
+    except (OSError, ValueError):
+        pass
+
+    def _clean_layout(body: dict) -> dict:
+        import math
+        laptops_in = body.get("laptops")
+        if not isinstance(laptops_in, dict) or len(laptops_in) > 64:
+            raise ApiError(400, "bad_request", "laptops must be an object with at most 64 entries")
+        laptops: dict[str, dict] = {}
+        for key, v in laptops_in.items():
+            if not isinstance(key, str) or not key or len(key) > 120 or not isinstance(v, dict):
+                raise ApiError(400, "bad_request", "each laptop needs a key and an {x,y,z,yaw} object")
+            entry = {}
+            for f in ("x", "y", "z", "yaw"):
+                n = v.get(f, 0.0)
+                if isinstance(n, bool) or not isinstance(n, (int, float)) or not math.isfinite(n) or abs(n) > 1000:
+                    raise ApiError(400, "bad_request", f"{key}.{f} must be a finite number")
+                entry[f] = round(float(n), 4)
+            entry["owner"] = str(v.get("owner") or "")[:80]
+            laptops[key] = entry
+        ref = [str(k) for k in (body.get("ref") or []) if str(k) in laptops][:2]
+        if laptops and not ref:
+            ref = [sorted(laptops)[0]]
+        return {"ref": ref, "laptops": laptops, "updated_at": now()}
+
+    @app.get("/api/layout")
+    async def get_layout() -> dict:
+        return layout_state
+
+    @app.post("/api/layout", dependencies=[Depends(require_control_key)])
+    async def post_layout(request: Request) -> dict:
+        clean = _clean_layout(await _json_body(request))
+        layout_state.clear()
+        layout_state.update(clean)
+        layout_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = layout_path.with_name("layout.json.tmp")
+        tmp.write_text(json.dumps(clean, indent=2))
+        os.replace(tmp, layout_path)
+        return layout_state
+
+    # ---------------------------------------------------------------- voice (Ron's voice-integration)
+    app.include_router(make_router(settings, require_control_key))
 
     @app.websocket("/view")
     async def ws_view(websocket: WebSocket) -> None:
@@ -449,7 +516,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 async with hub.lock:
                     t = now()
-                    msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t)})
+                    msg = json.dumps({"type": "state", "ts": t, "laptops": hub.legacy_laptops(t),
+                                      "layout": layout_state})
                 await websocket.send_text(msg)
                 await asyncio.sleep(0.5)
         except (WebSocketDisconnect, RuntimeError):
@@ -477,6 +545,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/ar", include_in_schema=False)
     async def ar():
         return _page("ar.html")
+
+    @app.get("/mic", include_in_schema=False)
+    async def mic_page():
+        return _page("mic.html")  # fallback mic (role=web), e.g. the laptop browser
+
+    @app.get("/probe", include_in_schema=False)
+    async def probe_page():
+        return _page("probe.html")  # Zapbox capability probe
 
     # LAST: everything else under / resolves to web/ (board.js, board.css, ar.html, ...)
     if web_dir.is_dir():

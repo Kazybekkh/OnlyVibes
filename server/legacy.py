@@ -15,6 +15,17 @@ import copy
 import httpx
 
 
+DEVICE_KEYS = ("hostname", "os", "os_family", "os_version", "arch", "vendor", "model", "model_id", "chip")
+
+
+def clean_device(d) -> dict:
+    """Whitelisted, length-capped device info (see shared/device_info.py); {} if absent."""
+    if not isinstance(d, dict):
+        return {}
+    out = {k: " ".join(str(d.get(k) or "").split())[:80] for k in DEVICE_KEYS if d.get(k)}
+    return out
+
+
 class LegacyState:
     """Latest reporter status per laptop (key = tailscale_ip, fallback laptop name)."""
 
@@ -28,6 +39,8 @@ class LegacyState:
         key = (data.get("tailscale_ip") or "").strip()
         if not key or key == "127.0.0.1":
             key = data.get("laptop") or "unknown"
+        if "device" in data:
+            data["device"] = clean_device(data.get("device"))
         self.states[key] = data
 
     def prune(self, now: float) -> None:

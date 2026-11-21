@@ -539,3 +539,6 @@ details pre { margin: 0; padding: 8px; max-height: 360px; overflow: auto; font-s
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: 0ms !important; }
 }
+
+/* device line on worker chips (model · chip · OS) */
+.wk-dev { font-size: 11px; opacity: .6; white-space: nowrap; }
